@@ -1,12 +1,16 @@
-import { useLayoutEffect, useEffect, useRef, useState } from "react";
+import { forwardRef, useLayoutEffect, useEffect, useRef, useState, type CSSProperties } from "react";
+import { ChevronRight } from "lucide-react";
 
 export interface MenuItem {
   label: string;
   icon?: React.ReactNode;
-  onClick: () => void;
+  shortcut?: string;
+  checked?: boolean;
+  onClick?: () => void;
   danger?: boolean;
   separator?: boolean;
   disabled?: boolean;
+  children?: MenuItem[];
 }
 
 interface ContextMenuProps {
@@ -52,38 +56,88 @@ export function ContextMenu({ items, x, y, onClose }: ContextMenuProps) {
     };
   }, [onClose]);
 
-  const style: React.CSSProperties = {
+  const style: CSSProperties = {
     position: "fixed",
     left: position.left,
     top: position.top,
     zIndex: 9999,
     maxHeight: "calc(100vh - 12px)",
-    overflowY: "auto",
+    overflow: "visible",
   };
 
   return (
-    <div
-      ref={ref}
-      className="min-w-[160px] py-1 rounded shadow-lg border text-[12px]"
-      style={{ ...style, background: "#fff", borderColor: "var(--moba-divider)" }}
-    >
-      {items.map((item, i) =>
-        item.separator ? (
-          <div key={i} className="h-px mx-2 my-1" style={{ background: "var(--moba-divider)" }} />
-        ) : (
-          <button
-            key={i}
-            className="w-full px-3 py-1 text-left flex items-center gap-2 hover:bg-[var(--moba-hover)] disabled:opacity-40"
-            style={item.danger ? { color: "#b22222" } : undefined}
-            onClick={() => { item.onClick(); onClose(); }}
-            disabled={item.disabled}
-          >
-            {item.icon && <span className="w-4 flex-shrink-0">{item.icon}</span>}
-            {item.label}
-          </button>
-        ),
+    <MenuSurface ref={ref} items={items} onClose={onClose} style={style} />
+  );
+}
+
+const MenuSurface = forwardRef<HTMLDivElement, {
+  items: MenuItem[];
+  onClose: () => void;
+  style?: CSSProperties;
+}>(({ items, onClose, style }, ref) => (
+  <div
+    ref={ref}
+    className="min-w-[220px] py-1 rounded shadow-lg border text-[12px]"
+    style={{ ...style, background: "#fff", borderColor: "var(--moba-divider)" }}
+  >
+    {items.map((item, i) => (
+      <MenuRow key={i} item={item} onClose={onClose} />
+    ))}
+  </div>
+));
+
+MenuSurface.displayName = "MenuSurface";
+
+function MenuRow({ item, onClose }: { item: MenuItem; onClose: () => void }) {
+  if (item.separator) {
+    return <div className="h-px mx-2 my-1" style={{ background: "var(--moba-divider)" }} />;
+  }
+
+  const hasChildren = !!item.children?.length;
+  const content = (
+    <>
+      <span className="w-4 flex-shrink-0 text-center">{item.checked ? "✓" : item.icon}</span>
+      <span className="flex-1 truncate">{item.label}</span>
+      {item.shortcut && (
+        <span className="ml-6 flex-shrink-0 text-[11px] text-slate-700">{item.shortcut}</span>
       )}
-    </div>
+      {hasChildren && <ChevronRight className="w-3 h-3 text-slate-500" />}
+    </>
+  );
+
+  if (hasChildren) {
+    return (
+      <div className="relative group/menu-row">
+        <button
+          className="w-full px-3 py-1 text-left flex items-center gap-2 hover:bg-[var(--moba-hover)] disabled:opacity-40"
+          style={item.danger ? { color: "#b22222" } : undefined}
+          disabled={item.disabled}
+          type="button"
+        >
+          {content}
+        </button>
+        {!item.disabled && (
+          <div className="hidden group-hover/menu-row:block absolute left-full top-[-4px] pl-1">
+            <MenuSurface items={item.children ?? []} onClose={onClose} />
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <button
+      className="w-full px-3 py-1 text-left flex items-center gap-2 hover:bg-[var(--moba-hover)] disabled:opacity-40"
+      style={item.danger ? { color: "#b22222" } : undefined}
+      onClick={() => {
+        item.onClick?.();
+        onClose();
+      }}
+      disabled={item.disabled}
+      type="button"
+    >
+      {content}
+    </button>
   );
 }
 

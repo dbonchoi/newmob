@@ -46,6 +46,7 @@ export function MainLayout() {
   const lastSidebarSizeRef = useRef(22);
   const [showSessionEditor, setShowSessionEditor] = useState(false);
   const [editingSession, setEditingSession] = useState<SessionConfig | undefined>();
+  const [newSessionGroupPath, setNewSessionGroupPath] = useState<string | null>(null);
   const [pendingAuth, setPendingAuth] = useState<PendingAuth | null>(null);
 
   useEffect(() => {
@@ -107,8 +108,9 @@ export function MainLayout() {
     };
   }, [confirmExitWithOpenTabs]);
 
-  const handleNewSession = useCallback(() => {
+  const handleNewSession = useCallback((groupPath: string | null = null) => {
     setEditingSession(undefined);
+    setNewSessionGroupPath(groupPath);
     setShowSessionEditor(true);
   }, []);
 
@@ -126,6 +128,7 @@ export function MainLayout() {
 
   const handleEditSession = useCallback((session: SessionConfig) => {
     setEditingSession(session);
+    setNewSessionGroupPath(null);
     setShowSessionEditor(true);
   }, []);
 
@@ -352,7 +355,12 @@ export function MainLayout() {
                     className="absolute inset-0"
                     style={{ display: activeTabId === tab.id ? "block" : "none" }}
                   >
-                    <TerminalPanel ssh={tab.ssh} visible={activeTabId === tab.id} />
+                    <TerminalPanel
+                      tabId={tab.id}
+                      tabTitle={tab.title}
+                      ssh={tab.ssh}
+                      visible={activeTabId === tab.id}
+                    />
                   </div>
                 ))}
 
@@ -371,9 +379,11 @@ export function MainLayout() {
       {showSessionEditor && (
         <SessionEditor
           session={editingSession}
+          defaultGroupPath={newSessionGroupPath}
           onClose={() => {
             setShowSessionEditor(false);
             setEditingSession(undefined);
+            setNewSessionGroupPath(null);
           }}
         />
       )}

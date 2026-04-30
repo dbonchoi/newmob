@@ -300,3 +300,35 @@ body {
 @keyframes moba-blink {
   50% { opacity: 0; }
 }
+
+.terminal-hide-scrollbar .xterm-viewport {
+  scrollbar-width: none;
+}
+.terminal-hide-scrollbar .xterm-viewport::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.terminal-font-ligatures .xterm,
+.terminal-font-ligatures .xterm-rows {
+  font-variant-ligatures: contextual common-ligatures;
+}
+.terminal-no-font-ligatures .xterm,
+.terminal-no-font-ligatures .xterm-rows {
+  font-variant-ligatures: none;
+}
+
+.terminal-search-hit {
+  position: absolute;
+  border-radius: 2px;
+  background: rgba(255, 209, 102, 0.32);
+  box-shadow: inset 0 0 0 1px rgba(255, 209, 102, 0.72);
+  mix-blend-mode: screen;
+}
+.terminal-search-hit-active {
+  background: rgba(64, 156, 255, 0.55);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.9),
+    0 0 0 1px rgba(64, 156, 255, 0.9);
+  mix-blend-mode: normal;
+}

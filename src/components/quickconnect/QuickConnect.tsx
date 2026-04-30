@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { ArrowLeft, ArrowRight, Home, RefreshCw } from "lucide-react";
 import { useSessionStore } from "../../stores/sessionStore";
+import { useAppStore } from "../../stores/appStore";
 import type { SessionConfig } from "../../lib/ipc";
 
 interface QuickConnectProps {
@@ -11,7 +12,9 @@ interface QuickConnectProps {
 
 export function QuickConnect({ onConnectInput, onConnectSession, onHome }: QuickConnectProps) {
   const [value, setValue] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
   const { sessions, loadSessions } = useSessionStore();
+  const setStatusMessage = useAppStore((s) => s.setStatusMessage);
 
   const recent = useMemo(
     () =>
@@ -27,6 +30,19 @@ export function QuickConnect({ onConnectInput, onConnectSession, onHome }: Quick
     if (!next) return;
     onConnectInput(next);
     setValue("");
+  };
+
+  const refreshSessions = async () => {
+    if (refreshing) return;
+
+    setRefreshing(true);
+    setStatusMessage("Refreshing sessions...");
+    try {
+      await loadSessions();
+      setStatusMessage("Sessions refreshed");
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   return (
@@ -76,9 +92,16 @@ export function QuickConnect({ onConnectInput, onConnectSession, onHome }: Quick
           </button>
         ))
       )}
-      <button className="p-0.5 hover:bg-white/70 rounded" title="Refresh sessions" onClick={() => void loadSessions()} type="button">
-        <RefreshCw className="w-3.5 h-3.5" />
+      <button
+        className="p-0.5 hover:bg-white/70 rounded disabled:opacity-50"
+        title={refreshing ? "Refreshing sessions..." : "Refresh sessions"}
+        onClick={() => void refreshSessions()}
+        disabled={refreshing}
+        type="button"
+      >
+        <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
       </button>
+      {refreshing && <span className="text-[var(--moba-text-muted)]">refreshing...</span>}
     </div>
   );
 }

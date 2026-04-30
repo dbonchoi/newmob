@@ -14,6 +14,7 @@ interface AppState {
   addTab: (tab: Tab) => void;
   removeTab: (id: string) => void;
   removeTabs: (ids: string[]) => void;
+  updateTabTitle: (id: string, title: string) => void;
   setActiveTab: (id: string) => void;
   toggleSidebar: () => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
@@ -66,6 +67,12 @@ export const useAppStore = create<AppState>((set) => ({
       }
       return { tabs: next, activeTabId: activeId, statusMessage: "Closed tabs" };
     }),
+
+  updateTabTitle: (id, title) =>
+    set((s) => ({
+      tabs: s.tabs.map((tab) => (tab.id === id ? { ...tab, title } : tab)),
+      statusMessage: `Renamed tab to ${title}`,
+    })),
 
   setActiveTab: (id) => set({ activeTabId: id }),
 

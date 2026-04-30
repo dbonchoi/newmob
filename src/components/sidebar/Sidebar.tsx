@@ -18,7 +18,7 @@ import { useSessionStore } from "../../stores/sessionStore";
 import type { SessionConfig } from "../../lib/ipc";
 
 interface SidebarProps {
-  onNewSession?: () => void;
+  onNewSession?: (groupPath?: string | null) => void;
   onEditSession?: (session: SessionConfig) => void;
   onConnectSession?: (session: SessionConfig) => void;
   compact?: boolean;
@@ -57,7 +57,7 @@ export function Sidebar({ onNewSession, onEditSession, onConnectSession, compact
     if (!selectedSession) return;
     void updateSession({
       ...selectedSession,
-      group_path: "Favorites",
+      group_path: "User sessions / Favorites",
       updated_at: Math.floor(Date.now() / 1000),
     });
   };
@@ -129,7 +129,7 @@ export function Sidebar({ onNewSession, onEditSession, onConnectSession, compact
           </div>
         </div>
         {activeSideTab === "sessions" ? (
-          <SessionTree onConnectSession={onConnectSession} onEditSession={onEditSession} />
+          <SessionTree onNewSession={onNewSession} onConnectSession={onConnectSession} onEditSession={onEditSession} />
         ) : (
           <UtilityPanel tab={activeSideTab} />
         )}

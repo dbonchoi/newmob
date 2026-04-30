@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   X,
   Terminal as TerminalIcon,
@@ -25,6 +25,13 @@ import {
 import { useSessionStore } from "../../stores/sessionStore";
 import { testSshConnection } from "../../lib/ipc";
 import { parseUserHostPort } from "../../lib/quickConnect";
+import {
+  SESSION_ROOT_LABEL,
+  collectFolderPaths,
+  folderOptionLabel,
+  normalizeGroupPath,
+  toStoredGroupPath,
+} from "../../lib/sessionPaths";
 import type { SessionConfig, AuthMethod } from "../../lib/ipc";
 
 /* ------------------------------------------------------------------ */
@@ -737,6 +744,7 @@ function NetworkSettings() {
 function BookmarkSettings({
   name, setName,
   groupPath, setGroupPath,
+  folderOptions,
   description, setDescription,
   tags, setTags,
   proto,
@@ -744,6 +752,7 @@ function BookmarkSettings({
 }: {
   name: string; setName: (v: string) => void;
   groupPath: string; setGroupPath: (v: string) => void;
+  folderOptions: string[];
   description: string; setDescription: (v: string) => void;
   tags: string; setTags: (v: string) => void;
   proto: Proto;
@@ -772,10 +781,7 @@ function BookmarkSettings({
         <Select
           value={groupPath || "User sessions"}
           className="w-[260px]"
-          options={[
-            "User sessions", "User sessions / Production",
-            "User sessions / Development", "User sessions / Quick & local",
-          ]}
+          options={folderOptions}
           onChange={(value) => setGroupPath(value === "User sessions" ? "" : value)}
         />
         <button className="moba-btn ml-2 flex items-center gap-1" type="button" onClick={onNewFolder}>
@@ -870,11 +876,12 @@ function BookmarkSettings({
 
 interface SessionEditorProps {
   session?: SessionConfig;
+  defaultGroupPath?: string | null;
   onClose: () => void;
 }
 
-export function SessionEditor({ session, onClose }: SessionEditorProps) {
-  const { addSession, updateSession, removeSession, addGroup } = useSessionStore();
+export function SessionEditor({ session, defaultGroupPath = null, onClose }: SessionEditorProps) {
+  const { addSession, updateSession, removeSession, createFolderPath, sessions, groups } = useSessionStore();
   const isEdit = !!session;
 
   /* --- core fields --- */
@@ -889,7 +896,9 @@ export function SessionEditor({ session, onClose }: SessionEditorProps) {
   );
   const [username, setUsername] = useState(session?.username ?? "");
   const [specifyUser, setSpecifyUser] = useState(!!session?.username);
-  const [groupPath, setGroupPath] = useState(session?.group_path ?? "");
+  const [groupPath, setGroupPath] = useState(
+    toStoredGroupPath(session?.group_path ?? defaultGroupPath) ?? "",
+  );
 
   /* --- auth --- */
   const [authMethod, setAuthMethod] = useState(
@@ -939,6 +948,28 @@ export function SessionEditor({ session, onClose }: SessionEditorProps) {
   /* --- derived --- */
   const needsHost = !["Serial", "File", "Shell", "WSL"].includes(proto);
   const isSSH = ["SSH", "SFTP"].includes(proto);
+  const folderOptions = useMemo(() => {
+    const options = new Set<string>([
+      SESSION_ROOT_LABEL,
+      "User sessions / Production",
+      "User sessions / Development",
+      "User sessions / Quick & local",
+    ]);
+
+    for (const path of collectFolderPaths(sessions, groups)) {
+      options.add(folderOptionLabel(path));
+    }
+
+    if (groupPath) {
+      options.add(folderOptionLabel(groupPath));
+    }
+
+    return [...options].sort((a, b) => {
+      if (a === SESSION_ROOT_LABEL) return -1;
+      if (b === SESSION_ROOT_LABEL) return 1;
+      return a.localeCompare(b);
+    });
+  }, [groupPath, groups, sessions]);
 
   const handleProtoChange = (p: Proto) => {
     setProto(p);
@@ -976,7 +1007,7 @@ export function SessionEditor({ session, onClose }: SessionEditorProps) {
       id: session?.id ?? crypto.randomUUID(),
       name: displayName,
       session_type: protoToSessionType(proto),
-      group_path: groupPath || null,
+      group_path: toStoredGroupPath(groupPath),
       host,
       port: parseInt(port) || DEFAULT_PORTS[proto] || 0,
       username: username || null,
@@ -1043,7 +1074,7 @@ export function SessionEditor({ session, onClose }: SessionEditorProps) {
     setPort(String(session?.port ?? DEFAULT_PORTS[nextProto] ?? 22));
     setUsername(session?.username ?? "");
     setSpecifyUser(!!session?.username);
-    setGroupPath(session?.group_path ?? "");
+    setGroupPath(toStoredGroupPath(session?.group_path ?? defaultGroupPath) ?? "");
     const nextAuth = extractAuthType(session?.auth_method);
     setAuthMethod(nextAuth);
     setAuthRadio(nextAuth === "PrivateKey" ? "privatekey" : nextAuth === "Agent" ? "agent" : nextAuth === "None" ? "gssapi" : "password");
@@ -1095,10 +1126,10 @@ export function SessionEditor({ session, onClose }: SessionEditorProps) {
 
   const handleNewFolder = () => {
     const next = window.prompt("New session folder", groupPath || "User sessions / New folder");
-    if (!next?.trim()) return;
-    const normalized = next.trim();
-    setGroupPath(normalized);
-    void addGroup(normalized.split("/").pop()?.trim() || normalized);
+    const normalized = normalizeGroupPath(next);
+    if (!normalized) return;
+    setGroupPath(toStoredGroupPath(normalized) ?? "");
+    void createFolderPath(normalized);
   };
 
   const handleDelete = async () => {
@@ -1342,6 +1373,7 @@ export function SessionEditor({ session, onClose }: SessionEditorProps) {
             <BookmarkSettings
               name={name} setName={setName}
               groupPath={groupPath} setGroupPath={setGroupPath}
+              folderOptions={folderOptions}
               description={description} setDescription={setDescription}
               tags={tags} setTags={setTags}
               proto={proto}
@@ -1385,7 +1417,7 @@ export function SessionEditor({ session, onClose }: SessionEditorProps) {
           <span className="ml-2 text-[11px] text-[var(--moba-text-muted)]">
             Will be saved to{" "}
             <span className="moba-mono">
-              User sessions / {groupPath || "Unsorted"} / {name || host || "…"}
+              {groupPath ? folderOptionLabel(groupPath) : SESSION_ROOT_LABEL} / {name || host || "..."}
             </span>
           </span>
 
