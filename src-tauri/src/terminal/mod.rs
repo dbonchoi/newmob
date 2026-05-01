@@ -26,6 +26,11 @@ unsafe impl Send for ActiveTerminal {}
 unsafe impl Sync for ActiveTerminal {}
 
 #[tauri::command]
+pub fn list_local_shells() -> Vec<pty::LocalShellOption> {
+    pty::list_local_shells()
+}
+
+#[tauri::command]
 pub async fn create_local_terminal(
     cols: u16,
     rows: u16,

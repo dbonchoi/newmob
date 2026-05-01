@@ -1,5 +1,5 @@
-use rusqlite::{params, Connection, Result as SqlResult};
 use super::models::{AuthMethod, SessionConfig, SessionGroup, SessionType};
+use rusqlite::{params, Connection, Result as SqlResult};
 
 pub fn init_db(conn: &Connection) -> SqlResult<()> {
     conn.execute_batch(
@@ -145,7 +145,13 @@ pub fn save_group(conn: &Connection, group: &SessionGroup) -> SqlResult<()> {
     conn.execute(
         "INSERT OR REPLACE INTO session_groups (id, name, parent_id, sort_order, icon)
          VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![group.id, group.name, group.parent_id, group.sort_order, group.icon],
+        params![
+            group.id,
+            group.name,
+            group.parent_id,
+            group.sort_order,
+            group.icon
+        ],
     )?;
     Ok(())
 }

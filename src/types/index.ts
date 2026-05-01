@@ -11,8 +11,14 @@ export interface Tab {
   connectionId?: string;
   closable: boolean;
   ssh?: SshConnectInfo;
+  localShell?: LocalShellSelection;
   terminalProfile?: TerminalProfile;
   message?: string;
+}
+
+export interface LocalShellSelection {
+  id: string;
+  name: string;
 }
 
 export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "error";

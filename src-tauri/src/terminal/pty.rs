@@ -1,5 +1,9 @@
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use serde::Serialize;
 use std::io::Read;
+#[cfg(windows)]
+use std::path::Path;
+use std::path::PathBuf;
 
 pub struct PtyHandle {
     pub writer: Box<dyn std::io::Write + Send>,
@@ -8,15 +12,332 @@ pub struct PtyHandle {
     pub master: Box<dyn portable_pty::MasterPty + Send>,
 }
 
-pub fn default_shell() -> String {
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalShellOption {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    pub args: Vec<String>,
+    pub is_default: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct ShellLaunch {
+    pub program: String,
+    pub args: Vec<String>,
+}
+
+pub fn list_local_shells() -> Vec<LocalShellOption> {
+    let mut shells = platform_local_shells();
+
+    if shells.is_empty() {
+        let fallback = fallback_shell_launch();
+        shells.push(LocalShellOption {
+            id: "default".to_string(),
+            name: "Default shell".to_string(),
+            path: fallback.program,
+            args: fallback.args,
+            is_default: true,
+        });
+    }
+
+    if !shells.iter().any(|shell| shell.is_default) {
+        if let Some(first) = shells.first_mut() {
+            first.is_default = true;
+        }
+    }
+
+    shells
+}
+
+pub fn resolve_shell(shell: Option<String>) -> ShellLaunch {
+    if let Some(raw) = shell {
+        let requested = raw.trim();
+        if !requested.is_empty() {
+            if let Some(option) = list_local_shells()
+                .into_iter()
+                .find(|option| option.id == requested)
+            {
+                return ShellLaunch {
+                    program: option.path,
+                    args: option.args,
+                };
+            }
+
+            return ShellLaunch {
+                program: requested.to_string(),
+                args: Vec::new(),
+            };
+        }
+    }
+
+    list_local_shells()
+        .into_iter()
+        .find(|option| option.is_default)
+        .map(|option| ShellLaunch {
+            program: option.path,
+            args: option.args,
+        })
+        .unwrap_or_else(fallback_shell_launch)
+}
+
+fn fallback_shell_launch() -> ShellLaunch {
     #[cfg(unix)]
     {
-        std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
+        ShellLaunch {
+            program: std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string()),
+            args: Vec::new(),
+        }
     }
     #[cfg(windows)]
     {
-        std::env::var("COMSPEC").unwrap_or_else(|_| "powershell.exe".to_string())
+        ShellLaunch {
+            program: std::env::var("COMSPEC").unwrap_or_else(|_| "powershell.exe".to_string()),
+            args: Vec::new(),
+        }
     }
+}
+
+#[cfg(windows)]
+fn platform_local_shells() -> Vec<LocalShellOption> {
+    let windows_powershell = find_windows_powershell();
+    let command_prompt = find_command_prompt();
+    let powershell = find_powershell_7();
+    let git_bash = find_git_bash();
+
+    let default_id = if powershell.is_some() {
+        "powershell"
+    } else if windows_powershell.is_some() {
+        "windows-powershell"
+    } else if command_prompt.is_some() {
+        "command-prompt"
+    } else {
+        "git-bash"
+    };
+
+    let mut shells = Vec::new();
+    if let Some(path) = windows_powershell {
+        shells.push(shell_option(
+            "windows-powershell",
+            "Windows PowerShell",
+            path,
+            vec!["-NoLogo".to_string()],
+            default_id,
+        ));
+    }
+    if let Some(path) = command_prompt {
+        shells.push(shell_option(
+            "command-prompt",
+            "Command Prompt",
+            path,
+            Vec::new(),
+            default_id,
+        ));
+    }
+    if let Some(path) = powershell {
+        shells.push(shell_option(
+            "powershell",
+            "PowerShell",
+            path,
+            vec!["-NoLogo".to_string()],
+            default_id,
+        ));
+    }
+    if let Some(path) = git_bash {
+        shells.push(shell_option(
+            "git-bash",
+            "Git Bash",
+            path,
+            vec!["--login".to_string(), "-i".to_string()],
+            default_id,
+        ));
+    }
+
+    shells
+}
+
+#[cfg(unix)]
+fn platform_local_shells() -> Vec<LocalShellOption> {
+    let shell = std::env::var("SHELL")
+        .ok()
+        .map(PathBuf::from)
+        .filter(|path| path.exists())
+        .or_else(|| first_existing(["/bin/zsh", "/bin/bash", "/bin/sh"].map(PathBuf::from)));
+
+    shell
+        .map(|path| {
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("Default shell")
+                .to_string();
+            LocalShellOption {
+                id: "default".to_string(),
+                name,
+                path: path_to_string(path),
+                args: Vec::new(),
+                is_default: true,
+            }
+        })
+        .into_iter()
+        .collect()
+}
+
+#[cfg(windows)]
+fn shell_option(
+    id: &str,
+    name: &str,
+    path: PathBuf,
+    args: Vec<String>,
+    default_id: &str,
+) -> LocalShellOption {
+    LocalShellOption {
+        id: id.to_string(),
+        name: name.to_string(),
+        path: path_to_string(path),
+        args,
+        is_default: id == default_id,
+    }
+}
+
+#[cfg(windows)]
+fn find_powershell_7() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(path) = find_in_path("pwsh.exe") {
+        candidates.push(path);
+    }
+    candidates.extend(
+        [
+            env_join("ProgramFiles", "PowerShell\\7\\pwsh.exe"),
+            env_join("ProgramW6432", "PowerShell\\7\\pwsh.exe"),
+            env_join("ProgramFiles(x86)", "PowerShell\\7\\pwsh.exe"),
+            env_join("LOCALAPPDATA", "Microsoft\\powershell\\7\\pwsh.exe"),
+            env_join("LOCALAPPDATA", "Programs\\PowerShell\\7\\pwsh.exe"),
+        ]
+        .into_iter()
+        .flatten(),
+    );
+
+    first_existing(candidates)
+}
+
+#[cfg(windows)]
+fn find_windows_powershell() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(path) = find_in_path("powershell.exe") {
+        candidates.push(path);
+    }
+    candidates.extend(
+        [
+            env_join(
+                "SystemRoot",
+                "System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            ),
+            env_join(
+                "WINDIR",
+                "System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            ),
+        ]
+        .into_iter()
+        .flatten(),
+    );
+
+    first_existing(candidates)
+}
+
+#[cfg(windows)]
+fn find_command_prompt() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(comspec) = std::env::var_os("COMSPEC").map(PathBuf::from) {
+        candidates.push(comspec);
+    }
+    if let Some(path) = find_in_path("cmd.exe") {
+        candidates.push(path);
+    }
+    candidates.extend(
+        [
+            env_join("SystemRoot", "System32\\cmd.exe"),
+            env_join("WINDIR", "System32\\cmd.exe"),
+        ]
+        .into_iter()
+        .flatten(),
+    );
+
+    first_existing(candidates)
+}
+
+#[cfg(windows)]
+fn find_git_bash() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(path) = find_in_path("bash.exe").filter(|path| is_git_bash_path(path)) {
+        candidates.push(path);
+    }
+    if let Some(git) = find_in_path("git.exe") {
+        if let Some(parent) = git.parent() {
+            let dir_name = parent
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+
+            if dir_name == "cmd" {
+                if let Some(root) = parent.parent() {
+                    candidates.push(root.join("bin\\bash.exe"));
+                }
+            } else if dir_name == "bin" {
+                candidates.push(parent.join("bash.exe"));
+            }
+        }
+    }
+    candidates.extend(
+        [
+            env_join("ProgramFiles", "Git\\bin\\bash.exe"),
+            env_join("ProgramW6432", "Git\\bin\\bash.exe"),
+            env_join("ProgramFiles(x86)", "Git\\bin\\bash.exe"),
+            env_join("LOCALAPPDATA", "Programs\\Git\\bin\\bash.exe"),
+        ]
+        .into_iter()
+        .flatten(),
+    );
+
+    first_existing(candidates)
+}
+
+#[cfg(windows)]
+fn is_git_bash_path(path: &Path) -> bool {
+    path.to_string_lossy()
+        .replace('/', "\\")
+        .to_ascii_lowercase()
+        .contains("\\git\\")
+}
+
+#[cfg(windows)]
+fn env_join(var: &str, child: &str) -> Option<PathBuf> {
+    std::env::var_os(var)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .map(|base| base.join(child))
+}
+
+#[cfg(windows)]
+fn find_in_path(program: &str) -> Option<PathBuf> {
+    std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path)
+            .map(|dir| dir.join(program))
+            .find(|candidate| candidate.is_file())
+    })
+}
+
+fn first_existing<I>(paths: I) -> Option<PathBuf>
+where
+    I: IntoIterator<Item = PathBuf>,
+{
+    paths.into_iter().find(|path| path.is_file())
+}
+
+fn path_to_string(path: PathBuf) -> String {
+    path.to_string_lossy().into_owned()
 }
 
 pub fn create_pty(
@@ -38,8 +359,11 @@ pub fn create_pty(
         .openpty(size)
         .map_err(|e| format!("Failed to open PTY: {}", e))?;
 
-    let shell_path = shell.unwrap_or_else(default_shell);
-    let mut cmd = CommandBuilder::new(&shell_path);
+    let shell_launch = resolve_shell(shell);
+    let mut cmd = CommandBuilder::new(&shell_launch.program);
+    for arg in &shell_launch.args {
+        cmd.arg(arg);
+    }
 
     if let Some(dir) = cwd {
         cmd.cwd(dir);

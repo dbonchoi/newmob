@@ -118,15 +118,7 @@ pub async fn connect_ssh(
         .map_err(|e| format!("Failed to open SSH channel: {}", e))?;
 
     channel
-        .request_pty(
-            false,
-            "xterm-256color",
-            cols as u32,
-            rows as u32,
-            0,
-            0,
-            &[],
-        )
+        .request_pty(false, "xterm-256color", cols as u32, rows as u32, 0, 0, &[])
         .await
         .map_err(|e| format!("Failed to request PTY: {}", e))?;
 

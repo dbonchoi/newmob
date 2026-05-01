@@ -54,6 +54,10 @@ interface TerminalPanelProps {
   tabTitle?: string;
   theme?: string;
   ssh?: SshConnectInfo;
+  localShell?: {
+    id: string;
+    name: string;
+  };
   terminalProfile?: TerminalProfile;
   visible?: boolean;
 }
@@ -82,6 +86,7 @@ export function TerminalPanel({
   tabTitle = "Terminal",
   theme = "classic",
   ssh,
+  localShell,
   terminalProfile,
   visible = true,
 }: TerminalPanelProps) {
@@ -758,14 +763,14 @@ export function TerminalPanel({
 
     const connectPromise = ssh
       ? createSshTerminal(ssh.host, ssh.port, ssh.username, ssh.authMethod, ssh.authData, cols, rows)
-      : createLocalTerminal(cols, rows);
+      : createLocalTerminal(cols, rows, localShell?.id);
 
     if (ssh) {
       appendEvent("connection", `Connecting to ${ssh.username}@${ssh.host}:${ssh.port}`);
       appendEvent("auth", `Using ${ssh.authMethod} authentication`);
       term.write(`\x1b[33mConnecting to ${ssh.username}@${ssh.host}:${ssh.port}...\x1b[0m\r\n`);
     } else {
-      appendEvent("connection", "Starting local terminal");
+      appendEvent("connection", `Starting ${localShell?.name ?? "local terminal"}`);
     }
 
     connectPromise

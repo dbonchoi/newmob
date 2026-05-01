@@ -34,7 +34,10 @@ mod tests {
             .await
             .expect("system font enumeration should succeed");
 
-        assert!(!fonts.is_empty(), "expected at least one installed font family");
+        assert!(
+            !fonts.is_empty(),
+            "expected at least one installed font family"
+        );
         assert!(
             fonts.iter().all(|font| !font.trim().is_empty()),
             "font family names should not be blank",
@@ -43,6 +46,9 @@ mod tests {
         let mut sorted = fonts.clone();
         sorted.sort_by_key(|font| font.to_lowercase());
         sorted.dedup_by_key(|font| font.to_lowercase());
-        assert_eq!(fonts, sorted, "font family names should be sorted and deduplicated");
+        assert_eq!(
+            fonts, sorted,
+            "font family names should be sorted and deduplicated"
+        );
     }
 }

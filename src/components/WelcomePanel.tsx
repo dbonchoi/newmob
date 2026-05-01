@@ -6,19 +6,24 @@ import {
   Activity,
   ScrollText,
 } from "lucide-react";
-import { useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { parseOpenSshConfig } from "../lib/quickConnect";
+import { listLocalShells, type LocalShellOption } from "../lib/ipc";
 import { AppThemeIconButton } from "./settings/AppThemeSwitcher";
 import { useAppStore } from "../stores/appStore";
 import { useSessionStore } from "../stores/sessionStore";
+import type { LocalShellSelection } from "../types";
 
 interface WelcomePanelProps {
-  onStartLocalTerminal: () => void;
+  onStartLocalTerminal: (shell?: LocalShellSelection) => void;
   onNewSession: () => void;
 }
 
 export function WelcomePanel({ onStartLocalTerminal, onNewSession }: WelcomePanelProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [localShells, setLocalShells] = useState<LocalShellOption[]>([]);
+  const [selectedShellId, setSelectedShellId] = useState("");
+  const [shellStatus, setShellStatus] = useState<"loading" | "ready" | "error">("loading");
   const { tabs, setStatusMessage } = useAppStore();
   const { sessions, addSession, loadSessions } = useSessionStore();
   const activeConnections = tabs.filter((tab) => tab.type === "terminal" && tab.closable);
@@ -26,6 +31,32 @@ export function WelcomePanel({ onStartLocalTerminal, onNewSession }: WelcomePane
     .slice()
     .sort((a, b) => Math.max(b.updated_at, b.last_connected_at ?? 0) - Math.max(a.updated_at, a.last_connected_at ?? 0))
     .slice(0, 5);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    listLocalShells()
+      .then((shells) => {
+        if (cancelled) return;
+        setLocalShells(shells);
+        setSelectedShellId(shells.find((shell) => shell.isDefault)?.id ?? shells[0]?.id ?? "");
+        setShellStatus("ready");
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setShellStatus("error");
+        setStatusMessage(`Local shell detection failed: ${String(error)}`);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [setStatusMessage]);
+
+  const selectedShell = useMemo(
+    () => localShells.find((shell) => shell.id === selectedShellId),
+    [localShells, selectedShellId],
+  );
 
   const handleImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -70,12 +101,18 @@ export function WelcomePanel({ onStartLocalTerminal, onNewSession }: WelcomePane
           </div>
 
           <div className="grid grid-cols-2 gap-3">
-            <ActionCard
-              icon={<TerminalIcon className="w-5 h-5" />}
-              title="Start local terminal"
-              desc="Open a bash shell with /drives mounted, GIT, ssh-agent and a private $HOME."
+            <LocalTerminalCard
+              shells={localShells}
+              selectedShell={selectedShell}
+              selectedShellId={selectedShellId}
+              shellStatus={shellStatus}
+              onSelectShell={setSelectedShellId}
               kbd="Ctrl+Shift+T"
-              onClick={onStartLocalTerminal}
+              onStart={() => {
+                onStartLocalTerminal(
+                  selectedShell ? { id: selectedShell.id, name: selectedShell.name } : undefined,
+                );
+              }}
             />
             <ActionCard
               icon={<Plus className="w-5 h-5" />}
@@ -121,7 +158,7 @@ export function WelcomePanel({ onStartLocalTerminal, onNewSession }: WelcomePane
               key={tab.id}
               color={tab.ssh ? "#2b5d8b" : "#2f8a3e"}
               name={tab.title}
-              meta={tab.ssh ? `ssh • ${tab.ssh.username}@${tab.ssh.host}` : "local shell"}
+              meta={tab.ssh ? `ssh • ${tab.ssh.username}@${tab.ssh.host}` : tab.localShell?.name ?? "local shell"}
             />
           ))
         )}
@@ -138,6 +175,85 @@ export function WelcomePanel({ onStartLocalTerminal, onNewSession }: WelcomePane
             />
           ))
         )}
+      </div>
+    </div>
+  );
+}
+
+function LocalTerminalCard({
+  shells,
+  selectedShell,
+  selectedShellId,
+  shellStatus,
+  onSelectShell,
+  kbd,
+  onStart,
+}: {
+  shells: LocalShellOption[];
+  selectedShell?: LocalShellOption;
+  selectedShellId: string;
+  shellStatus: "loading" | "ready" | "error";
+  onSelectShell: (id: string) => void;
+  kbd: string;
+  onStart: () => void;
+}) {
+  const hasChoices = shells.length > 1;
+  const detail = selectedShell?.path ?? (
+    shellStatus === "loading" ? "Detecting available shells..." : "Use the system default shell."
+  );
+
+  return (
+    <div
+      className="text-left p-3 rounded-md border hover:shadow-sm transition"
+      style={{ borderColor: "var(--moba-card-border)", background: "var(--moba-card-bg)" }}
+    >
+      <div className="flex items-center gap-2 mb-1">
+        <span style={{ color: "var(--moba-accent)" }}><TerminalIcon className="w-5 h-5" /></span>
+        <span className="font-semibold">Start local terminal</span>
+        {kbd && (
+          <span
+            className="ml-auto text-[10px] moba-mono px-1.5 py-0.5 rounded border"
+            style={{
+              background: "var(--moba-input-bg)",
+              borderColor: "var(--moba-divider)",
+              color: "var(--moba-text-muted)",
+            }}
+          >
+            {kbd}
+          </span>
+        )}
+      </div>
+      <div className="text-[12px] text-[var(--moba-text-muted)]">
+        {selectedShell ? `Open ${selectedShell.name}.` : "Open a local shell."}
+      </div>
+
+      <div className="mt-2 flex items-center gap-2">
+        {hasChoices ? (
+          <select
+            className="moba-input h-8 flex-1"
+            aria-label="Terminal shell"
+            value={selectedShellId}
+            title={selectedShell?.path}
+            onChange={(event) => onSelectShell(event.target.value)}
+          >
+            {shells.map((shell) => (
+              <option key={shell.id} value={shell.id}>
+                {shell.name}{shell.isDefault ? " (default)" : ""}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <div
+            className="moba-input h-8 flex-1 flex items-center truncate"
+            title={detail}
+            style={{ color: selectedShell ? "var(--moba-text)" : "var(--moba-text-muted)" }}
+          >
+            {selectedShell?.name ?? (shellStatus === "loading" ? "Detecting shells..." : "Default shell")}
+          </div>
+        )}
+        <button className="moba-btn h-8 px-3" onClick={onStart} type="button">
+          Open
+        </button>
       </div>
     </div>
   );

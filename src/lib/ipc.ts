@@ -1,6 +1,18 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
+export interface LocalShellOption {
+  id: string;
+  name: string;
+  path: string;
+  args: string[];
+  isDefault: boolean;
+}
+
+export async function listLocalShells(): Promise<LocalShellOption[]> {
+  return invoke<LocalShellOption[]>("list_local_shells", {});
+}
+
 export async function createLocalTerminal(
   cols: number,
   rows: number,

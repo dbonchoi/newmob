@@ -15,37 +15,25 @@ pub async fn list_sessions(
 }
 
 #[tauri::command]
-pub async fn get_session(
-    id: String,
-    state: State<'_, AppState>,
-) -> Result<SessionConfig, String> {
+pub async fn get_session(id: String, state: State<'_, AppState>) -> Result<SessionConfig, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     db::get_session(&db, &id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn save_session(
-    config: SessionConfig,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn save_session(config: SessionConfig, state: State<'_, AppState>) -> Result<(), String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     db::save_session(&db, &config).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn delete_session(
-    id: String,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn delete_session(id: String, state: State<'_, AppState>) -> Result<(), String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     db::delete_session(&db, &id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub async fn mark_session_connected(
-    id: String,
-    state: State<'_, AppState>,
-) -> Result<i64, String> {
+pub async fn mark_session_connected(id: String, state: State<'_, AppState>) -> Result<i64, String> {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| e.to_string())?
@@ -56,9 +44,7 @@ pub async fn mark_session_connected(
 }
 
 #[tauri::command]
-pub async fn list_session_groups(
-    state: State<'_, AppState>,
-) -> Result<Vec<SessionGroup>, String> {
+pub async fn list_session_groups(state: State<'_, AppState>) -> Result<Vec<SessionGroup>, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     db::list_groups(&db).map_err(|e| e.to_string())
 }
@@ -73,10 +59,7 @@ pub async fn save_session_group(
 }
 
 #[tauri::command]
-pub async fn delete_session_group(
-    id: String,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn delete_session_group(id: String, state: State<'_, AppState>) -> Result<(), String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     db::delete_group(&db, &id).map_err(|e| e.to_string())
 }

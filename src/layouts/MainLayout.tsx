@@ -22,6 +22,7 @@ import { WelcomePanel } from "../components/WelcomePanel";
 import { parseQuickConnectInput } from "../lib/quickConnect";
 import { exitApp, type SessionConfig } from "../lib/ipc";
 import { getSessionTerminalProfile, type TerminalProfile } from "../lib/terminalProfile";
+import type { LocalShellSelection } from "../types";
 
 interface PendingAuth {
   session: SessionConfig;
@@ -116,13 +117,19 @@ export function MainLayout() {
     setShowSessionEditor(true);
   }, []);
 
-  const openLocalTab = useCallback((title = "Local terminal", sessionId?: string, terminalProfile?: TerminalProfile) => {
+  const openLocalTab = useCallback((
+    title = "Local terminal",
+    sessionId?: string,
+    terminalProfile?: TerminalProfile,
+    localShell?: LocalShellSelection,
+  ) => {
     const id = `local-${Date.now()}`;
     addTab({
       id,
       type: "terminal",
       title,
       sessionId,
+      localShell,
       terminalProfile,
       closable: true,
     });
@@ -363,7 +370,7 @@ export function MainLayout() {
                 {/* Welcome panel */}
                 {(activeTab?.type === "welcome" || !activeTab) && (
                   <WelcomePanel
-                    onStartLocalTerminal={() => openLocalTab()}
+                    onStartLocalTerminal={(localShell) => openLocalTab(localShell?.name ?? "Local terminal", undefined, undefined, localShell)}
                     onNewSession={handleNewSession}
                   />
                 )}
@@ -379,6 +386,7 @@ export function MainLayout() {
                       tabId={tab.id}
                       tabTitle={tab.title}
                       ssh={tab.ssh}
+                      localShell={tab.localShell}
                       terminalProfile={tab.terminalProfile}
                       visible={activeTabId === tab.id}
                     />
