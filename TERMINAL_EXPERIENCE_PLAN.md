@@ -162,3 +162,20 @@ export interface TerminalProfile {
 - [x] `pnpm exec tsc -b` - passed.
 - [x] `pnpm build` - passed; Vite reports existing large chunk warning.
 - [x] `cargo check` in `src-tauri` - passed; existing dead-code warnings remain.
+
+## 7. Linux IME Compatibility Follow-up
+
+> 目标：修复 Linux Tauri/WebKitGTK 环境下终端中文输入 composition/preedit 被 xterm 重复转发，导致中文重复回显的问题。
+
+- [x] Confirm the terminal input path is xterm `onData` -> Tauri `write_terminal` -> PTY/SSH, with no frontend local echo.
+- [x] Add a Linux-only terminal IME guard around xterm input.
+- [x] Suppress preedit data while IME composition is active, including raw pinyin and interim CJK text.
+- [x] Allow the final committed CJK text through exactly once when xterm emits it normally.
+- [x] Add a fallback commit when WebKitGTK provides `compositionend`/`beforeinput` data but xterm emits no final `onData`.
+- [x] Limit duplicate suppression to the composition commit window so fast repeated Chinese input is not swallowed.
+- [x] Clean up IME listeners and pending timers when the terminal panel is disposed.
+
+### Verification
+
+- [x] `pnpm test` - 21 tests passed, including 6 focused `TerminalImeInputGuard` cases.
+- [x] `pnpm build` - passed; Vite reports the existing large chunk warning.

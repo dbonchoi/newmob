@@ -20,6 +20,11 @@ import {
   useSystemFonts,
 } from "../../lib/systemFonts";
 import {
+  attachTerminalImeGuard,
+  shouldUseLinuxImeGuard,
+  TerminalImeInputGuard,
+} from "../../lib/terminalImeGuard";
+import {
   createLocalTerminal,
   createSshTerminal,
   writeTerminal,
@@ -128,6 +133,7 @@ export function TerminalPanel({
   const lastMacroRef = useRef("");
   const macroPlaybackRef = useRef(false);
   const eventIdRef = useRef(0);
+  const imeGuardRef = useRef<TerminalImeInputGuard | null>(null);
   const quickFontOptions = useMemo(() => {
     const available = fontState.fonts;
     const preferred = SAFE_TERMINAL_FONT_FALLBACKS
@@ -198,7 +204,7 @@ export function TerminalPanel({
     themeName,
   ]);
 
-  const writeInput = useCallback((data: string) => {
+  const sendTerminalInput = useCallback((data: string) => {
     const sid = sessionIdRef.current;
     if (!sid || readOnlyRef.current) return;
     if (macroRecordingRef.current && !macroPlaybackRef.current) {
@@ -206,6 +212,16 @@ export function TerminalPanel({
     }
     writeTerminal(sid, encodeBase64(data)).catch(console.error);
   }, []);
+
+  const writeInput = sendTerminalInput;
+
+  const writeXtermInput = useCallback((data: string) => {
+    const filtered = imeGuardRef.current?.filterTerminalData(data) ?? data;
+    if (filtered === null) {
+      return;
+    }
+    sendTerminalInput(filtered);
+  }, [sendTerminalInput]);
 
   const writeBinaryInput = useCallback((data: string) => {
     const sid = sessionIdRef.current;
@@ -681,6 +697,7 @@ export function TerminalPanel({
     let destroyed = false;
     let unlistenOutput: UnlistenFn | null = null;
     let unlistenExit: UnlistenFn | null = null;
+    let detachImeGuard: (() => void) | null = null;
     let resizeTimer: ReturnType<typeof setTimeout>;
 
     const term = new Terminal({
@@ -703,13 +720,20 @@ export function TerminalPanel({
     term.loadAddon(new WebLinksAddon());
     term.open(el);
 
+    if (shouldUseLinuxImeGuard()) {
+      // Linux WebKitGTK can forward IME preedit text through xterm before the final commit.
+      const guard = new TerminalImeInputGuard({ commit: sendTerminalInput });
+      imeGuardRef.current = guard;
+      detachImeGuard = attachTerminalImeGuard(el, guard);
+    }
+
     try {
       term.loadAddon(new WebglAddon());
     } catch { /* WebGL not available */ }
 
     fitVisibleTerminal();
 
-    term.onData(writeInput);
+    term.onData(writeXtermInput);
     term.onBinary(writeBinaryInput);
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== "keydown") return true;
@@ -784,6 +808,7 @@ export function TerminalPanel({
       clearTimeout(resizeTimer);
       unlistenOutput?.();
       unlistenExit?.();
+      detachImeGuard?.();
       if (loggingActiveRef.current && outputLogRef.current) {
         flushRecordedOutput("Terminal closed; saved recorded output");
       }
@@ -793,6 +818,7 @@ export function TerminalPanel({
       fitAddonRef.current = null;
       searchAddonRef.current = null;
       sessionIdRef.current = null;
+      imeGuardRef.current = null;
       initializedRef.current = false;
     };
   }, []);
