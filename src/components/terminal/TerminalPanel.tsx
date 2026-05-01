@@ -853,7 +853,10 @@ export function TerminalPanel({
     if (!visible) return;
 
     const handleKeyDown = (event: KeyboardEvent) => {
-      handleShortcutKey(event);
+      if (handleShortcutKey(event) === false) {
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+      }
     };
 
     window.addEventListener("keydown", handleKeyDown, true);
