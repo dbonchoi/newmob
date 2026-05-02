@@ -134,6 +134,12 @@ export function FileBrowser(props: FileBrowserProps) {
     };
   }, [props.sessionId, detach]);
 
+  // Reset the one-shot guard when this component is reused for a different
+  // session (e.g. tab swap that reuses the same FileBrowser instance).
+  useEffect(() => {
+    initialSyncDoneRef.current = false;
+  }, [props.sessionId]);
+
   // One-shot initial sync to terminal cwd, after attach completes.
   useEffect(() => {
     if (initialSyncDoneRef.current) return;
