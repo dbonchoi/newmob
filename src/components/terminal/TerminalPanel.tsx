@@ -49,6 +49,9 @@ export interface SshConnectInfo {
   authMethod: string;
   authData: string | null;
   optionsJson?: string;
+  /** When false, the OSC 7 PROMPT_COMMAND/precmd snippet is NOT injected.
+   *  Default is undefined → treated as enabled. */
+  osc7AutoInject?: boolean;
 }
 
 interface TerminalPanelProps {
@@ -815,7 +818,7 @@ export function TerminalPanel({
           term.write(output);
         });
 
-        if (ssh) {
+        if (ssh && ssh.osc7AutoInject !== false) {
           // Best-effort: teach the remote shell to emit OSC 7 on every
           // prompt so the SFTP browser can follow the cwd.  We send the
           // snippet a short while after connection so the shell PS1 has

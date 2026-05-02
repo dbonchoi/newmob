@@ -15,9 +15,12 @@ interface DetachedSftpParams {
 
 const STORAGE_PREFIX = "newmob.sftp.detached.";
 
+// We use localStorage (not sessionStorage) so a Tauri WebviewWindow opened
+// for a detached SFTP view can read the handoff written by the main window;
+// sessionStorage is per-WebContents and would otherwise be empty.
 export function readDetachedHandoff(sessionId: string): DetachedSftpParams | null {
   try {
-    const raw = sessionStorage.getItem(STORAGE_PREFIX + sessionId);
+    const raw = localStorage.getItem(STORAGE_PREFIX + sessionId);
     if (!raw) return null;
     return JSON.parse(raw) as DetachedSftpParams;
   } catch {
@@ -27,7 +30,15 @@ export function readDetachedHandoff(sessionId: string): DetachedSftpParams | nul
 
 export function writeDetachedHandoff(params: DetachedSftpParams): void {
   try {
-    sessionStorage.setItem(STORAGE_PREFIX + params.sessionId, JSON.stringify(params));
+    localStorage.setItem(STORAGE_PREFIX + params.sessionId, JSON.stringify(params));
+  } catch {
+    /* noop */
+  }
+}
+
+export function clearDetachedHandoff(sessionId: string): void {
+  try {
+    localStorage.removeItem(STORAGE_PREFIX + sessionId);
   } catch {
     /* noop */
   }
@@ -79,8 +90,8 @@ export function SftpDetachedWindow({ sessionId }: { sessionId: string }) {
       }
     };
     window.addEventListener("storage", handler);
-    // poll sessionStorage too because storage event doesn't fire
-    // for the same tab and sessionStorage isn't shared across tabs.
+    // Poll as a fallback for browsers/runtimes where the storage event
+    // doesn't fire reliably between windows (e.g. some Tauri webviews).
     const id = window.setInterval(() => {
       const next = readDetachedHandoff(sessionId);
       if (next) {

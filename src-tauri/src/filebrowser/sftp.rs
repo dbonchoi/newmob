@@ -91,10 +91,26 @@ impl ActiveSftp {
             }
             let attrs = item.metadata();
             let full = join_remote(path, &name);
-            entries.push(entry_from_attrs(name, full, attrs));
+            let mut dto = entry_from_attrs(name, full.clone(), attrs);
+            // Resolve symlink targets for display. Best-effort: failures
+            // (broken links, permission denied) leave the field empty.
+            if dto.file_type == "symlink" {
+                let sftp = self.sftp.lock().await;
+                if let Ok(target) = sftp.read_link(full.clone()).await {
+                    dto.symlink_target = Some(target);
+                }
+            }
+            entries.push(dto);
         }
         entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
         Ok(entries)
+    }
+
+    pub async fn read_link(&self, path: &str) -> Result<String, String> {
+        let sftp = self.sftp.lock().await;
+        sftp.read_link(path.to_string())
+            .await
+            .map_err(|e| format!("readlink {}: {}", path, e))
     }
 
     pub async fn stat(&self, path: &str) -> Result<FileEntryDto, String> {
@@ -263,6 +279,13 @@ impl ActiveSftp {
             if handle.is_cancelled() {
                 return Err("transfer cancelled".to_string());
             }
+            if handle.is_paused() {
+                emit_paused(&app, &transfer_id, written, total);
+                handle.wait_while_paused().await;
+                if handle.is_cancelled() {
+                    return Err("transfer cancelled".to_string());
+                }
+            }
             let n = file
                 .read(&mut buf)
                 .await
@@ -326,6 +349,13 @@ impl ActiveSftp {
             if handle.is_cancelled() {
                 return Err("transfer cancelled".to_string());
             }
+            if handle.is_paused() {
+                emit_paused(&app, &transfer_id, read_total, total);
+                handle.wait_while_paused().await;
+                if handle.is_cancelled() {
+                    return Err("transfer cancelled".to_string());
+                }
+            }
             let n = remote_file
                 .read(&mut buf)
                 .await
@@ -363,6 +393,19 @@ fn emit_progress(app: &AppHandle, transfer_id: &str, bytes: u64, total: u64, sta
         },
     );
     transfer::touch();
+}
+
+fn emit_paused(app: &AppHandle, transfer_id: &str, bytes: u64, total: u64) {
+    // Send a zero-rate frame so the UI flips into the "paused" badge.
+    let _ = app.emit(
+        &format!("sftp-paused-{}", transfer_id),
+        ProgressPayload {
+            bytes,
+            total,
+            rate: 0.0,
+            eta: 0.0,
+        },
+    );
 }
 
 fn entry_from_attrs(

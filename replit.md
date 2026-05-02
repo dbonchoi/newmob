@@ -75,9 +75,30 @@ all render the same `<FileBrowser>` component:
    inactive so transfers keep running in the background.
 3. **Detached window** — both attached and standalone variants expose a
    "Detach to window" action that stashes the SFTP credentials in
-   `sessionStorage` (key `newmob.sftp.detached.<sid>`) and opens
-   `?sftp=<sid>`; `App.tsx` detects the query param and renders
-   `<SftpDetachedWindow>` instead of the main shell.
+   `localStorage` (key `newmob.sftp.detached.<sid>`) and opens `?sftp=<sid>`;
+   `App.tsx` detects the query param and renders `<SftpDetachedWindow>`
+   instead of the main shell. In Tauri the new window is a real OS
+   `WebviewWindow` opened via the `open_sftp_window` Rust command (sharing
+   the same origin, so the same `localStorage` is visible); in browser
+   preview we fall back to `window.open`.
+
+The SFTP browser also supports per-view toggles:
+- **Follow terminal cwd** — both `<SftpSidebar>` and `<FileBrowser>` show a
+  link/unlink chip the user can click to stop the panel from snapping back
+  to whatever the shell last reported via OSC 7.
+- **OSC 7 auto-inject** — under *Advanced SSH settings* the user can
+  disable injection of the `PROMPT_COMMAND`/`precmd_functions` snippet
+  per-session (default ON). The flag flows through `options_json` →
+  `SshConnectInfo.osc7AutoInject` → `<TerminalPanel>`.
+
+Transfers can be **paused, resumed, retried, or cancelled** from the
+queue UI. The Rust transfer worker holds an `AtomicBool + tokio::Notify`
+that the chunk loop checks every block; pause emits
+`sftp-paused-{transferId}` so the UI can flip its badge immediately.
+
+A small `BroadcastChannel` (`newmob.sftp.sync`, see `src/lib/sftpSync.ts`)
+mirrors the in-memory transfer queue across same-origin windows so a
+detached SFTP window and the main app see the same upload/download list.
 
 **Frontend layers:**
 - `src/components/filebrowser/` — `FileBrowser`, `FilePanel`, `PathBreadcrumb`,
@@ -147,10 +168,11 @@ Configured as a **static** site deployment:
 - Session data is persisted in `localStorage` (keys: `newmob.sessions.v1`, `newmob.groups.v1`)
 - SSH connections in browser preview are real (via the WebSocket proxy above). Local PTY and the placeholder protocols (RDP/VNC/SFTP/Telnet/Serial) are still UI-only.
 - The app theme (light/dark/system) is stored in `localStorage` under `newmob.appTheme.v1`
-- SFTP detached windows depend on browser `window.open` — if pop-ups are blocked
-  the status bar reports "Browser blocked the SFTP window…". The handoff key
-  in `sessionStorage` is removed by `<SftpDetachedWindow>` after read so a
-  refresh of the popup re-uses the still-attached parent state.
+- SFTP detached windows: in Tauri they spawn a real `WebviewWindow` via
+  the `open_sftp_window` command; in browser preview they fall back to
+  `window.open` and report "Browser blocked the SFTP window…" if pop-ups
+  are denied. Handoff is via `localStorage` so the new window can read
+  the credentials regardless of runtime.
 
 ## Known Pitfalls / Fixes
 

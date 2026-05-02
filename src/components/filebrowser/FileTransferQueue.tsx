@@ -1,15 +1,25 @@
 import { useEffect } from "react";
-import { Trash2, X, Eraser } from "lucide-react";
+import { Trash2, X, Eraser, Pause, Play, RotateCw } from "lucide-react";
 import { useTransferStore } from "../../stores/transferStore";
 import { formatBytes, formatRate, formatEta, type TransferState } from "../../lib/sftp";
 
 interface FileTransferQueueProps {
   sessionId?: string;
   onCancel: (transferId: string) => void;
+  onPause?: (transferId: string) => void;
+  onResume?: (transferId: string) => void;
+  onRetry?: (transferId: string) => void;
   compact?: boolean;
 }
 
-export function FileTransferQueue({ sessionId, onCancel, compact }: FileTransferQueueProps) {
+export function FileTransferQueue({
+  sessionId,
+  onCancel,
+  onPause,
+  onResume,
+  onRetry,
+  compact,
+}: FileTransferQueueProps) {
   const items = useTransferStore((s) => s.items);
   const remove = useTransferStore((s) => s.remove);
   const clearCompleted = useTransferStore((s) => s.clearCompleted);
@@ -60,6 +70,13 @@ export function FileTransferQueue({ sessionId, onCancel, compact }: FileTransfer
         )}
         {filtered.map((it) => {
           const pct = it.size > 0 ? Math.min(100, (it.bytes / it.size) * 100) : 0;
+          const isInFlight = it.state === "running" || it.state === "queued";
+          const canPause = onPause && it.state === "running";
+          const canResume = onResume && it.state === "paused";
+          const canRetry =
+            onRetry &&
+            (it.state === "error" || it.state === "cancelled") &&
+            !it.localPath.startsWith("OS:");
           return (
             <div
               key={it.id}
@@ -84,7 +101,37 @@ export function FileTransferQueue({ sessionId, onCancel, compact }: FileTransfer
                     {formatRate(it.rate)} • {formatEta(it.eta)}
                   </span>
                 )}
-                {it.state === "running" || it.state === "queued" ? (
+                {canPause && (
+                  <button
+                    type="button"
+                    className="px-1 hover:bg-[var(--moba-hover)] rounded"
+                    title="Pause"
+                    onClick={() => onPause!(it.id)}
+                  >
+                    <Pause className="w-3 h-3" />
+                  </button>
+                )}
+                {canResume && (
+                  <button
+                    type="button"
+                    className="px-1 hover:bg-[var(--moba-hover)] rounded"
+                    title="Resume"
+                    onClick={() => onResume!(it.id)}
+                  >
+                    <Play className="w-3 h-3" />
+                  </button>
+                )}
+                {canRetry && (
+                  <button
+                    type="button"
+                    className="px-1 hover:bg-[var(--moba-hover)] rounded"
+                    title="Retry"
+                    onClick={() => onRetry!(it.id)}
+                  >
+                    <RotateCw className="w-3 h-3" />
+                  </button>
+                )}
+                {isInFlight || it.state === "paused" ? (
                   <button
                     type="button"
                     className="px-1 hover:bg-[var(--moba-hover)] rounded"
@@ -117,7 +164,9 @@ export function FileTransferQueue({ sessionId, onCancel, compact }: FileTransfer
                         ? "#c0432a"
                         : it.state === "done"
                           ? "#3da064"
-                          : "var(--moba-accent)",
+                          : it.state === "paused"
+                            ? "#d99a2b"
+                            : "var(--moba-accent)",
                   }}
                 />
               </div>

@@ -18,6 +18,9 @@ import { AuthPrompt } from "../components/session/AuthPrompt";
 import { SettingsPanel } from "../components/settings/SettingsPanel";
 import { FileBrowser } from "../components/filebrowser/FileBrowser";
 import { SftpSidebar } from "../components/filebrowser/SftpSidebar";
+import { isTauriRuntime } from "../lib/runtime";
+import { openSftpWindow } from "../lib/sftp";
+import { parseSessionOptions } from "../lib/terminalProfile";
 import {
   detachedWindowUrl,
   writeDetachedHandoff,
@@ -72,6 +75,15 @@ export function MainLayout() {
 
   const openDetachedSftp = useCallback((params: SftpTabInfo, title: string) => {
     writeDetachedHandoff({ ...params, title });
+    if (isTauriRuntime()) {
+      // Native: open a real OS window via the Rust command. The handoff
+      // payload was just written to localStorage above so the new window
+      // can read it on mount.
+      void openSftpWindow(params.sessionId, title).catch((err) => {
+        setStatusMessage(`Could not open SFTP window: ${err instanceof Error ? err.message : err}`);
+      });
+      return;
+    }
     const url = detachedWindowUrl(params.sessionId);
     const features = "width=1200,height=760,resizable=yes,scrollbars=yes";
     const handle = window.open(url, `newmob_sftp_${params.sessionId}`, features);
@@ -239,6 +251,10 @@ export function MainLayout() {
         authMethod,
         authData,
         optionsJson: session.options_json,
+        // Default ON for backwards compatibility — only suppress when the
+        // user explicitly disables OSC 7 auto-injection in the editor.
+        osc7AutoInject:
+          parseSessionOptions(session.options_json).osc7AutoInject !== false,
       },
       terminalProfile: getSessionTerminalProfile(session.options_json),
     });

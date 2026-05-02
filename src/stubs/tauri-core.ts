@@ -426,6 +426,41 @@ export async function invoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
       if (sid && isSftpSession(sid)) sftpCancel(sid, transferId);
       return undefined as T;
     }
+    case "sftp_pause_transfer": {
+      // Browser stub doesn't have a real per-transfer worker to suspend,
+      // but we still emit the paused event so the UI flips to "paused".
+      const transferId = args?.transferId as string;
+      void emit(`sftp-paused-${transferId}`, {
+        bytes: 0,
+        total: 0,
+        rate: 0,
+        eta: 0,
+      });
+      return undefined as T;
+    }
+    case "sftp_resume_transfer": {
+      // No-op in browser preview; the real backend will start re-emitting
+      // progress events when the worker resumes.
+      return undefined as T;
+    }
+    case "open_sftp_window": {
+      const sessionId = args?.sessionId as string;
+      const url = new URL(window.location.href);
+      url.searchParams.set("sftp", sessionId);
+      url.hash = "";
+      const features = "width=1200,height=760,resizable=yes,scrollbars=yes";
+      const handle = window.open(
+        url.toString(),
+        `newmob_sftp_${sessionId}`,
+        features,
+      );
+      if (!handle) {
+        throw new Error(
+          "Browser blocked the SFTP window. Allow pop-ups for this site.",
+        );
+      }
+      return undefined as T;
+    }
     case "sftp_open_path": {
       // No real OS shell in browser preview.
       throw new Error(

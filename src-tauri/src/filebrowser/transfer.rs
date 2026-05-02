@@ -3,24 +3,52 @@ use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::State;
+use tokio::sync::Notify;
 
 pub struct TransferHandle {
     cancelled: AtomicBool,
+    paused: AtomicBool,
+    resume: Notify,
 }
 
 impl TransferHandle {
     pub fn new() -> Self {
         Self {
             cancelled: AtomicBool::new(false),
+            paused: AtomicBool::new(false),
+            resume: Notify::new(),
         }
     }
 
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::SeqCst);
+        // wake any waiter so it can observe the cancel.
+        self.resume.notify_waiters();
     }
 
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::SeqCst)
+    }
+
+    pub fn pause(&self) {
+        self.paused.store(true, Ordering::SeqCst);
+    }
+
+    pub fn resume(&self) {
+        self.paused.store(false, Ordering::SeqCst);
+        self.resume.notify_waiters();
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(Ordering::SeqCst)
+    }
+
+    /// Suspends the calling task while the transfer is paused. Returns
+    /// immediately if the transfer is cancelled or not paused.
+    pub async fn wait_while_paused(&self) {
+        while self.is_paused() && !self.is_cancelled() {
+            self.resume.notified().await;
+        }
     }
 }
 
@@ -66,6 +94,20 @@ pub async fn cancel(state: &State<'_, AppState>, transfer_id: &str) {
     let transfers = state.transfers.read().await;
     if let Some(handle) = transfers.get(transfer_id) {
         handle.cancel();
+    }
+}
+
+pub async fn pause(state: &State<'_, AppState>, transfer_id: &str) {
+    let transfers = state.transfers.read().await;
+    if let Some(handle) = transfers.get(transfer_id) {
+        handle.pause();
+    }
+}
+
+pub async fn resume(state: &State<'_, AppState>, transfer_id: &str) {
+    let transfers = state.transfers.read().await;
+    if let Some(handle) = transfers.get(transfer_id) {
+        handle.resume();
     }
 }
 

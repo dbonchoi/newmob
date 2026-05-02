@@ -204,6 +204,21 @@ export async function sftpCancelTransfer(transferId: string): Promise<void> {
   return invoke("sftp_cancel_transfer", { transferId });
 }
 
+export async function sftpPauseTransfer(transferId: string): Promise<void> {
+  return invoke("sftp_pause_transfer", { transferId });
+}
+
+export async function sftpResumeTransfer(transferId: string): Promise<void> {
+  return invoke("sftp_resume_transfer", { transferId });
+}
+
+export async function openSftpWindow(
+  sessionId: string,
+  title: string,
+): Promise<void> {
+  return invoke("open_sftp_window", { sessionId, title });
+}
+
 export async function sftpOpenPath(path: string): Promise<void> {
   return invoke("sftp_open_path", { path });
 }
@@ -275,6 +290,16 @@ export async function listenSftpComplete(
 ): Promise<UnlistenFn> {
   return listen<TransferCompletePayload>(
     `sftp-transfer-complete-${transferId}`,
+    (event) => callback(event.payload),
+  );
+}
+
+export async function listenSftpPaused(
+  transferId: string,
+  callback: (payload: TransferProgressPayload) => void,
+): Promise<UnlistenFn> {
+  return listen<TransferProgressPayload>(
+    `sftp-paused-${transferId}`,
     (event) => callback(event.payload),
   );
 }

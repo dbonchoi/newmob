@@ -6,7 +6,7 @@ import { useSftpController } from "../../lib/sftpController";
 import { type FileEntry, joinPath } from "../../lib/sftp";
 import type { MenuItem } from "../ContextMenu";
 import { useAppStore } from "../../stores/appStore";
-import { Maximize2, X } from "lucide-react";
+import { Maximize2, Link2, Link2Off, X } from "lucide-react";
 
 interface SftpSidebarProps {
   sessionId: string;
@@ -29,6 +29,10 @@ export function SftpSidebar(props: SftpSidebarProps) {
   const setStatus = useAppStore((s) => s.setStatusMessage);
   const controller = useSftpController(props.sessionId);
   const [downloadPrompt, setDownloadPrompt] = useState<FileEntry | null>(null);
+  // Per-view toggle: when on, the sidebar follows the terminal's reported
+  // cwd (OSC 7). The user can turn it off to navigate freely without being
+  // pulled back to whatever the shell last printed.
+  const [followCwd, setFollowCwd] = useState(true);
 
   useEffect(() => {
     ensureSession(props.sessionId);
@@ -46,10 +50,11 @@ export function SftpSidebar(props: SftpSidebarProps) {
   }, [props.sessionId]);
 
   useEffect(() => {
+    if (!followCwd) return;
     if (!props.cwdHint || !session?.attached) return;
     if (session.remote.path === props.cwdHint) return;
     void navigate(props.sessionId, "remote", props.cwdHint);
-  }, [props.cwdHint, props.sessionId, session?.attached, session?.remote.path, navigate]);
+  }, [followCwd, props.cwdHint, props.sessionId, session?.attached, session?.remote.path, navigate]);
 
   const remoteContext = useCallback(
     (entry: FileEntry): MenuItem[] => {
@@ -120,6 +125,17 @@ export function SftpSidebar(props: SftpSidebarProps) {
         style={{ borderColor: "var(--moba-divider)", background: "var(--moba-quick-bg)" }}>
         <span className="truncate">{props.title ?? "SFTP"}</span>
         <div className="flex-1" />
+        {props.cwdHint !== undefined && (
+          <button
+            type="button"
+            className="px-1 hover:bg-[var(--moba-hover)] rounded"
+            title={followCwd ? "Stop following terminal cwd" : "Follow terminal cwd"}
+            onClick={() => setFollowCwd((v) => !v)}
+            style={{ color: followCwd ? "var(--moba-accent)" : "var(--moba-text-muted)" }}
+          >
+            {followCwd ? <Link2 className="w-3 h-3" /> : <Link2Off className="w-3 h-3" />}
+          </button>
+        )}
         {props.onDetach && (
           <button
             type="button"
@@ -173,6 +189,9 @@ export function SftpSidebar(props: SftpSidebarProps) {
       <FileTransferQueue
         sessionId={props.sessionId}
         onCancel={(id) => void controller.cancelTransfer(id)}
+        onPause={(id) => void controller.pauseTransfer(id)}
+        onResume={(id) => void controller.resumeTransfer(id)}
+        onRetry={(id) => void controller.retryTransfer(id)}
         compact
       />
 

@@ -2,13 +2,16 @@ import { useCallback } from "react";
 import {
   joinPath,
   listenSftpComplete,
+  listenSftpPaused,
   listenSftpProgress,
   sftpCancelTransfer,
   sftpDownload,
   sftpMkdir,
   sftpOpenPath,
+  sftpPauseTransfer,
   sftpRemove,
   sftpRename,
+  sftpResumeTransfer,
   sftpUpload,
   sftpUploadBytes,
   type FileEntry,
@@ -35,6 +38,7 @@ export function useSftpController(sessionId: string) {
     (transferId: string, refreshSide: PaneSide) => {
       let unlistenProgress: (() => void) | null = null;
       let unlistenComplete: (() => void) | null = null;
+      let unlistenPaused: (() => void) | null = null;
 
       void listenSftpProgress(transferId, (payload) => {
         patchTransfer(transferId, {
@@ -46,6 +50,19 @@ export function useSftpController(sessionId: string) {
         });
       }).then((u) => {
         unlistenProgress = u;
+      });
+
+      void listenSftpPaused(transferId, (payload) => {
+        // Backend pinged us that the worker is now suspended; mirror that
+        // into the UI so the badge flips from "running" to "paused".
+        patchTransfer(transferId, {
+          bytes: payload.bytes,
+          rate: 0,
+          eta: 0,
+          state: "paused",
+        });
+      }).then((u) => {
+        unlistenPaused = u;
       });
 
       void listenSftpComplete(transferId, (payload) => {
@@ -63,6 +80,7 @@ export function useSftpController(sessionId: string) {
         }
         unlistenProgress?.();
         unlistenComplete?.();
+        unlistenPaused?.();
       }).then((u) => {
         unlistenComplete = u;
       });
@@ -240,6 +258,61 @@ export function useSftpController(sessionId: string) {
     }
   }, [setStatus, setTransferState]);
 
+  const pauseTransfer = useCallback(async (transferId: string) => {
+    try {
+      await sftpPauseTransfer(transferId);
+      // Reflect the pause optimistically so the UI updates even if the backend
+      // chunk loop hasn't observed the flag yet.
+      patchTransfer(transferId, { state: "paused", rate: 0, eta: 0 });
+    } catch (err) {
+      setStatus(`Pause failed: ${err instanceof Error ? err.message : err}`);
+    }
+  }, [patchTransfer, setStatus]);
+
+  const resumeTransfer = useCallback(async (transferId: string) => {
+    try {
+      await sftpResumeTransfer(transferId);
+      patchTransfer(transferId, { state: "running" });
+    } catch (err) {
+      setStatus(`Resume failed: ${err instanceof Error ? err.message : err}`);
+    }
+  }, [patchTransfer, setStatus]);
+
+  const retryTransfer = useCallback(async (transferId: string) => {
+    const item = useTransferStore.getState().byId(transferId);
+    if (!item) return;
+    const { direction, remotePath, localPath, size, openAfter } = item;
+    // Reset the existing row instead of stacking duplicates so the user keeps
+    // a clean history of one entry per logical file.
+    patchTransfer(transferId, {
+      state: "queued",
+      bytes: 0,
+      rate: 0,
+      eta: 0,
+      error: null,
+      startedAt: Date.now(),
+      finishedAt: null,
+    });
+    startTransferTracking(transferId, direction === "upload" ? "remote" : "local");
+    try {
+      if (direction === "upload") {
+        await sftpUpload(sessionId, transferId, localPath, remotePath, !!openAfter);
+      } else {
+        await sftpDownload(sessionId, transferId, remotePath, localPath, !!openAfter);
+        if (openAfter && isTauriRuntime()) {
+          try {
+            await sftpOpenPath(localPath);
+          } catch (err) {
+            setStatus(`Saved to ${localPath}, but could not open it: ${err}`);
+          }
+        }
+      }
+    } catch (err) {
+      setStatus(`Retry failed: ${err instanceof Error ? err.message : err}`);
+    }
+    void size;
+  }, [patchTransfer, sessionId, setStatus, startTransferTracking]);
+
   const encodedAuth = useCallback((value: string | null): string | null => {
     if (value == null) return null;
     return encodeBase64(value);
@@ -253,6 +326,9 @@ export function useSftpController(sessionId: string) {
     remove,
     rename,
     cancelTransfer,
+    pauseTransfer,
+    resumeTransfer,
+    retryTransfer,
     encodedAuth,
   };
 }

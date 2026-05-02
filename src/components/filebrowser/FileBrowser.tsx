@@ -1,5 +1,6 @@
 import { useEffect, useCallback, useState, useMemo } from "react";
 import { PanelGroup, Panel, PanelResizeHandle } from "react-resizable-panels";
+import { Link2, Link2Off } from "lucide-react";
 import { FilePanel, isPreviewable } from "./FilePanel";
 import { FileTransferQueue } from "./FileTransferQueue";
 import { useSftpStore, type PaneSide } from "../../stores/sftpStore";
@@ -33,6 +34,9 @@ export function FileBrowser(props: FileBrowserProps) {
 
   const [downloadPrompt, setDownloadPrompt] = useState<FileEntry | null>(null);
   const [previewing, setPreviewing] = useState<{ entry: FileEntry; side: FsSide; text: string } | null>(null);
+  // Per-view toggle that gates the OSC 7 follow effect below; the user can
+  // disable it from the banner so the panel stays where they navigate.
+  const [followCwd, setFollowCwd] = useState(true);
 
   useEffect(() => {
     ensureSession(props.sessionId);
@@ -61,13 +65,15 @@ export function FileBrowser(props: FileBrowserProps) {
     };
   }, []);
 
-  // Follow the terminal's cwd (OSC 7) when running in attached mode.
+  // Follow the terminal's cwd (OSC 7) when running in attached mode and the
+  // user hasn't disabled the per-view follow toggle.
   useEffect(() => {
+    if (!followCwd) return;
     if (!props.cwdHint) return;
     if (!session?.attached) return;
     if (session.remote.path === props.cwdHint) return;
     void navigate(props.sessionId, "remote", props.cwdHint);
-  }, [props.cwdHint, props.sessionId, session?.attached, session?.remote.path, navigate]);
+  }, [followCwd, props.cwdHint, props.sessionId, session?.attached, session?.remote.path, navigate]);
 
   const handleDoubleClick = useCallback(
     async (side: PaneSide, entry: FileEntry) => {
@@ -247,6 +253,29 @@ export function FileBrowser(props: FileBrowserProps) {
 
   return (
     <div className="w-full h-full flex flex-col" style={{ background: "var(--moba-bg)" }}>
+      {props.cwdHint !== undefined && props.cwdHint !== null && (
+        <div
+          className="text-[11px] px-2 py-1 border-b shrink-0 flex items-center gap-2"
+          style={{
+            borderColor: "var(--moba-divider)",
+            background: "var(--moba-quick-bg)",
+            color: "var(--moba-text-muted)",
+          }}
+        >
+          <span>Terminal cwd:</span>
+          <span className="font-mono truncate flex-1">{props.cwdHint}</span>
+          <button
+            type="button"
+            className="px-1.5 py-0.5 inline-flex items-center gap-1 rounded hover:bg-[var(--moba-hover)]"
+            title={followCwd ? "Stop following terminal cwd" : "Follow terminal cwd"}
+            onClick={() => setFollowCwd((v) => !v)}
+            style={{ color: followCwd ? "var(--moba-accent)" : "var(--moba-text-muted)" }}
+          >
+            {followCwd ? <Link2 className="w-3 h-3" /> : <Link2Off className="w-3 h-3" />}
+            <span>{followCwd ? "Following" : "Free"}</span>
+          </button>
+        </div>
+      )}
       {banner && (
         <div className="text-[11px] px-2 py-1 border-b shrink-0"
           style={{
@@ -315,6 +344,9 @@ export function FileBrowser(props: FileBrowserProps) {
       <FileTransferQueue
         sessionId={props.sessionId}
         onCancel={(id) => void controller.cancelTransfer(id)}
+        onPause={(id) => void controller.pauseTransfer(id)}
+        onResume={(id) => void controller.resumeTransfer(id)}
+        onRetry={(id) => void controller.retryTransfer(id)}
       />
 
       {downloadPrompt && (

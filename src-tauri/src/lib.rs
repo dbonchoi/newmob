@@ -80,6 +80,9 @@ pub fn run() {
             filebrowser::sftp_upload_bytes,
             filebrowser::sftp_download_bytes,
             filebrowser::sftp_cancel_transfer,
+            filebrowser::sftp_pause_transfer,
+            filebrowser::sftp_resume_transfer,
+            filebrowser::open_sftp_window,
             appearance::list_system_fonts,
             exit_app,
         ])

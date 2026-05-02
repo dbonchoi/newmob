@@ -20,7 +20,7 @@ use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "lowercase")]
@@ -248,7 +248,14 @@ pub async fn sftp_upload_bytes(
         .decode(bytes_b64.as_bytes())
         .map_err(|e| format!("Invalid base64 payload: {}", e))?;
     let session = get_session(&state, &session_id).await?;
-    let dest = sftp::join_remote(&remote_path, &local_name);
+    // Frontend already passes the full destination path; only fall back to
+    // joining when the caller explicitly provided a directory path with no
+    // trailing filename component.
+    let dest = if remote_path.ends_with('/') || remote_path.is_empty() {
+        sftp::join_remote(&remote_path, &local_name)
+    } else {
+        remote_path.clone()
+    };
     session.write_bytes(&dest, &bytes).await?;
     let _ = app_handle.emit(
         &format!("sftp-transfer-complete-{}", transfer_id),
@@ -283,7 +290,14 @@ pub async fn sftp_upload(
     let session = get_session(&state, &session_id).await?;
     let handle = transfer::register(&state, &transfer_id).await;
     let local = PathBuf::from(&local_path);
-    let dest = sftp::join_remote(&remote_path, file_name(&local));
+    // Frontend (sftpController.upload) passes the full remote destination
+    // already (`joinPath(remoteDir, entry.name)`). Only fall back to joining
+    // basename when remote_path looks like a directory.
+    let dest = if remote_path.ends_with('/') || remote_path.is_empty() {
+        sftp::join_remote(&remote_path, file_name(&local))
+    } else {
+        remote_path.clone()
+    };
     let app = app_handle.clone();
     let result = session
         .upload_file(&local, &dest, transfer_id.clone(), handle.clone(), app.clone())
@@ -310,7 +324,21 @@ pub async fn sftp_download(
 ) -> Result<(), String> {
     let session = get_session(&state, &session_id).await?;
     let handle = transfer::register(&state, &transfer_id).await;
-    let dest = PathBuf::from(&local_path).join(remote_basename(&remote_path));
+    // Frontend (sftpController.download) passes the full local destination
+    // already (`joinPath(localDir, entry.name)`). Treat trailing-separator or
+    // empty paths as directory hints and append the remote basename.
+    let dest = {
+        let raw = PathBuf::from(&local_path);
+        let needs_basename = local_path.is_empty()
+            || local_path.ends_with('/')
+            || local_path.ends_with('\\')
+            || raw.is_dir();
+        if needs_basename {
+            raw.join(remote_basename(&remote_path))
+        } else {
+            raw
+        }
+    };
     let app = app_handle.clone();
     let result = session
         .download_file(&remote_path, &dest, transfer_id.clone(), handle.clone(), app.clone())
@@ -336,6 +364,54 @@ pub async fn sftp_cancel_transfer(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     transfer::cancel(&state, &transfer_id).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn sftp_pause_transfer(
+    transfer_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    transfer::pause(&state, &transfer_id).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn sftp_resume_transfer(
+    transfer_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    transfer::resume(&state, &transfer_id).await;
+    Ok(())
+}
+
+/// Open a new native window pointing at `index.html?sftp=<session_id>`. The
+/// caller is expected to seed the handoff payload via localStorage *before*
+/// invoking; the detached window picks it up via
+/// `readDetachedHandoff(sessionId)` in `SftpDetachedWindow`.
+#[tauri::command]
+pub async fn open_sftp_window(
+    app_handle: AppHandle,
+    session_id: String,
+    title: Option<String>,
+) -> Result<(), String> {
+    let label = format!("sftp-{}", session_id.replace(|c: char| !c.is_alphanumeric(), "-"));
+    if app_handle.get_webview_window(&label).is_some() {
+        // Reuse / focus the existing window if it is still alive.
+        if let Some(w) = app_handle.get_webview_window(&label) {
+            let _ = w.set_focus();
+        }
+        return Ok(());
+    }
+    let url = WebviewUrl::App(PathBuf::from(format!("index.html?sftp={}", session_id)));
+    let title = title.unwrap_or_else(|| format!("SFTP — {}", session_id));
+    WebviewWindowBuilder::new(&app_handle, &label, url)
+        .title(&title)
+        .inner_size(1200.0, 760.0)
+        .min_inner_size(720.0, 420.0)
+        .resizable(true)
+        .build()
+        .map_err(|e| format!("failed to open SFTP window: {}", e))?;
     Ok(())
 }
 
