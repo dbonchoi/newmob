@@ -6,6 +6,8 @@ import { sftpProxyPlugin } from "./vite-plugins/sftpProxy";
 
 const isTauriBuild = !!process.env.TAURI_ENV_PLATFORM;
 
+const devPort = isTauriBuild ? 1420 : 5000;
+
 export default defineConfig({
   plugins: [react(), ...(isTauriBuild ? [] : [sshProxyPlugin(), sftpProxyPlugin()])],
   clearScreen: false,
@@ -20,7 +22,7 @@ export default defineConfig({
         },
   },
   server: {
-    port: 5000,
+    port: devPort,
     strictPort: true,
     host: "0.0.0.0",
     allowedHosts: true,
