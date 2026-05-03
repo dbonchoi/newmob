@@ -16,6 +16,7 @@ import { TerminalPanel } from "../components/terminal/TerminalPanel";
 import { SessionEditor } from "../components/session/SessionEditor";
 import { AuthPrompt } from "../components/session/AuthPrompt";
 import { SettingsPanel } from "../components/settings/SettingsPanel";
+import { TunnelManager } from "../components/tunnel/TunnelManager";
 import { FileBrowser } from "../components/filebrowser/FileBrowser";
 import { SftpSidebar } from "../components/filebrowser/SftpSidebar";
 import { isTauriRuntime } from "../lib/runtime";
@@ -412,9 +413,22 @@ export function MainLayout() {
       case "exit":
         requestAppExit();
         break;
+      case "tunneling": {
+        const existing = tabsRef.current.find((tab) => tab.type === "nettools");
+        if (existing) {
+          setActiveTab(existing.id);
+        } else {
+          addTab({
+            id: "nettools-tunnels",
+            type: "nettools",
+            title: "SSH tunnels",
+            closable: true,
+          });
+        }
+        break;
+      }
       case "tools":
-      case "tunneling":
-        openPlaceholderTab("Network tools", "Network tools and tunneling will be implemented after the terminal/session MVP.");
+        openPlaceholderTab("Network tools", "Additional network utilities will be added in a later phase.");
         break;
       case "packages":
         openPlaceholderTab("Packages", "Package management is not part of Phase 1-2.");
@@ -645,12 +659,17 @@ export function MainLayout() {
 
                 {activeTab?.type === "settings" && <SettingsPanel />}
 
-                {/* Non-terminal, non-sftp, non-welcome, non-settings tabs */}
+                {activeTab?.type === "nettools" && (
+                  <TunnelManager onStatusMessage={setStatusMessage} />
+                )}
+
+                {/* Non-terminal, non-sftp, non-welcome, non-settings, non-nettools tabs */}
                 {activeTab &&
                   activeTab.type !== "welcome" &&
                   activeTab.type !== "terminal" &&
                   activeTab.type !== "sftp" &&
-                  activeTab.type !== "settings" && (
+                  activeTab.type !== "settings" &&
+                  activeTab.type !== "nettools" && (
                   <UnavailablePanel title={activeTab.title} message={activeTab.message} />
                 )}
               </div>

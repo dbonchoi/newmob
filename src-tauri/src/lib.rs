@@ -86,6 +86,16 @@ pub fn run() {
             filebrowser::sftp_resume_transfer,
             filebrowser::open_sftp_window,
             appearance::list_system_fonts,
+            tunnel::list_tunnels,
+            tunnel::upsert_tunnel,
+            tunnel::delete_tunnel,
+            tunnel::start_tunnel,
+            tunnel::stop_tunnel,
+            tunnel::start_all_tunnels,
+            tunnel::stop_all_tunnels,
+            tunnel::reorder_tunnels,
+            tunnel::get_tunnel_status,
+            tunnel::list_tunnel_statuses,
             exit_app,
         ])
         .run(tauri::generate_context!())

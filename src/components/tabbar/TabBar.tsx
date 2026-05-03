@@ -4,6 +4,7 @@ import {
   Terminal as TerminalIcon,
   Folder,
   Monitor,
+  Network as NetworkIcon,
   SplitSquareVertical,
   Users,
   Maximize2,
@@ -116,6 +117,8 @@ function TabIcon({ kind, ssh }: { kind: TabKind; ssh?: boolean }) {
     case "rdp":
     case "vnc":
       return <Monitor className="w-3 h-3" style={{ color: "#a04b9c" }} />;
+    case "nettools":
+      return <NetworkIcon className="w-3 h-3" style={{ color: "#236a98" }} />;
     default:
       return <TerminalIcon className="w-3 h-3" style={{ color: "#2b5d8b" }} />;
   }
