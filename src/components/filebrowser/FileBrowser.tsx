@@ -465,70 +465,11 @@ export function FileBrowser(props: FileBrowserProps) {
           // react-resizable-panels reads new sizes cleanly.
           key={orientation}
           direction={orientation}
-          autoSaveId={`sftp-browser-${orientationScope}-${orientation}`}
+          // v2: pane order changed (REMOTE on top/left). Bumping the
+          // autoSaveId ensures any persisted v1 sizes don't flip the
+          // visual order back the wrong way for returning users.
+          autoSaveId={`sftp-browser-v2-${orientationScope}-${orientation}`}
         >
-          <Panel defaultSize={50} minSize={15} className="flex flex-col min-h-0 min-w-0">
-            <FilePanel
-              sessionId={props.sessionId}
-              side="local"
-              detachable={props.detachable}
-              onDetach={props.onDetach}
-              onItemDoubleClick={(e) => void handleDoubleClick("local", e)}
-              onItemContext={localContext}
-              onEmptyContext={localEmptyContext}
-              onPaneFiles={handleLocalFiles}
-              acceptCrossPane
-              onCrossPaneDrop={handleCrossPaneToLocal}
-              filterText={localFilter}
-              onFilterTextChange={setLocalFilter}
-              onUploadSelected={(entries) => {
-                const remoteDir = session?.remote.path ?? "/";
-                for (const entry of entries) {
-                  void controller.upload(entry, remoteDir);
-                }
-              }}
-              onDeleteSelected={(entries) => {
-                if (entries.length === 0) return;
-                const summary = entries.length === 1
-                  ? entries[0].name
-                  : `${entries.length} items`;
-                if (!window.confirm(`Delete ${summary}?`)) return;
-                for (const entry of entries) {
-                  void controller.remove(entry.path, "local", true);
-                }
-              }}
-              onChmodSelected={(entries) => {
-                if (entries.length === 0) return;
-                setChmodPrompt({ entries, side: "local" });
-              }}
-              onPreviewSelected={(entry) => {
-                if (!isPreviewable(entry)) {
-                  setStatus(`Preview not supported for ${entry.name}`);
-                  return;
-                }
-                void (async () => {
-                  try {
-                    const { sftpReadFileText } = await import("../../lib/sftp");
-                    const text = await sftpReadFileText(props.sessionId, entry.path, "local");
-                    setPreviewing({ entry, side: "local", text });
-                  } catch (err) {
-                    setStatus(`Preview failed: ${err}`);
-                  }
-                })();
-              }}
-              onNewFile={() => {
-                const name = window.prompt("New file name", "new-file.txt");
-                if (name) void controller.createFile(session?.local.path ?? "", name, "local");
-              }}
-            />
-          </Panel>
-          <PanelResizeHandle
-            className={
-              orientation === "horizontal"
-                ? "w-[3px] bg-[var(--moba-divider)] hover:bg-[var(--moba-accent)] transition-colors cursor-col-resize"
-                : "h-[3px] bg-[var(--moba-divider)] hover:bg-[var(--moba-accent)] transition-colors cursor-row-resize"
-            }
-          />
           <Panel defaultSize={50} minSize={15} className="flex flex-col min-h-0 min-w-0">
             <FilePanel
               sessionId={props.sessionId}
@@ -585,6 +526,68 @@ export function FileBrowser(props: FileBrowserProps) {
                 if (name) void controller.createFile(session?.remote.path ?? "/", name, "remote");
               }}
               onOpenTerminalHere={props.onOpenTerminalHere}
+            />
+          </Panel>
+          <PanelResizeHandle
+            className={
+              orientation === "horizontal"
+                ? "w-[3px] bg-[var(--moba-divider)] hover:bg-[var(--moba-accent)] transition-colors cursor-col-resize"
+                : "h-[3px] bg-[var(--moba-divider)] hover:bg-[var(--moba-accent)] transition-colors cursor-row-resize"
+            }
+          />
+          <Panel defaultSize={50} minSize={15} className="flex flex-col min-h-0 min-w-0">
+            <FilePanel
+              sessionId={props.sessionId}
+              side="local"
+              detachable={props.detachable}
+              onDetach={props.onDetach}
+              onItemDoubleClick={(e) => void handleDoubleClick("local", e)}
+              onItemContext={localContext}
+              onEmptyContext={localEmptyContext}
+              onPaneFiles={handleLocalFiles}
+              acceptCrossPane
+              onCrossPaneDrop={handleCrossPaneToLocal}
+              filterText={localFilter}
+              onFilterTextChange={setLocalFilter}
+              onUploadSelected={(entries) => {
+                const remoteDir = session?.remote.path ?? "/";
+                for (const entry of entries) {
+                  void controller.upload(entry, remoteDir);
+                }
+              }}
+              onDeleteSelected={(entries) => {
+                if (entries.length === 0) return;
+                const summary = entries.length === 1
+                  ? entries[0].name
+                  : `${entries.length} items`;
+                if (!window.confirm(`Delete ${summary}?`)) return;
+                for (const entry of entries) {
+                  void controller.remove(entry.path, "local", true);
+                }
+              }}
+              onChmodSelected={(entries) => {
+                if (entries.length === 0) return;
+                setChmodPrompt({ entries, side: "local" });
+              }}
+              onPreviewSelected={(entry) => {
+                if (!isPreviewable(entry)) {
+                  setStatus(`Preview not supported for ${entry.name}`);
+                  return;
+                }
+                void (async () => {
+                  try {
+                    const { sftpReadFileText } = await import("../../lib/sftp");
+                    const text = await sftpReadFileText(props.sessionId, entry.path, "local");
+                    setPreviewing({ entry, side: "local", text });
+                  } catch (err) {
+                    setStatus(`Preview failed: ${err}`);
+                  }
+                })();
+              }}
+              onNewFile={() => {
+                const name = window.prompt("New file name", "new-file.txt");
+                if (name) void controller.createFile(session?.local.path ?? "", name, "local");
+              }}
             />
           </Panel>
         </PanelGroup>

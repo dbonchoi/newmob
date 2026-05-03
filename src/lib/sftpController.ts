@@ -10,6 +10,7 @@ import {
   sftpDownloadDir,
   sftpListLocal,
   sftpListRemote,
+  sftpLocalHome,
   sftpMkdir,
   sftpOpenPath,
   sftpPauseTransfer,
@@ -185,9 +186,31 @@ export function useSftpController(sessionId: string) {
       localDir: string,
       opts: TransferStartOpts = {},
     ) => {
+      // Defensive fallback: in some bootstrap orderings (notably the
+      // detached SFTP window which races attach + first download) the
+      // local pane's path can still be empty when the user clicks
+      // "Download to local". Without a usable directory the backend
+      // receives a bare filename, writes nowhere visible, and the
+      // transfer row sits at "queued" forever — looking like a hang.
+      // Try to resolve the local home as a last-ditch destination;
+      // if even that fails, surface a real error instead of stalling.
+      let dir = localDir;
+      if (!dir) {
+        try {
+          dir = await sftpLocalHome();
+        } catch {
+          dir = "";
+        }
+      }
+      if (!dir) {
+        setStatus(
+          "Download failed: local destination folder is unknown. Open the SFTP browser, pick a folder in the LOCAL pane, and try again.",
+        );
+        return;
+      }
       const isDir = entry.fileType === "dir";
       const transferId = newTransferId();
-      const localPath = joinPath(localDir, entry.name);
+      const localPath = joinPath(dir, entry.name);
       addTransfer({
         id: transferId,
         sessionId,

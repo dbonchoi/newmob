@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useCallback, useRef, type DragEvent, type MouseEvent } from "react";
-import { Folder, File as FileIcon, Link as LinkIcon } from "lucide-react";
+import { Folder, File as FileIcon, Link as LinkIcon, HardDrive, ChevronDown } from "lucide-react";
 import { PathBreadcrumb } from "./PathBreadcrumb";
 import { FileToolbar } from "./FileToolbar";
 import { useContextMenu, type MenuItem } from "../ContextMenu";
@@ -8,8 +8,48 @@ import {
   basename,
   formatBytes,
   parentPath,
+  sftpLocalDrives,
+  type DriveEntry,
   type FileEntry,
 } from "../../lib/sftp";
+
+interface ColWidths {
+  size: number;
+  mtime: number;
+  type: number;
+}
+const DEFAULT_COL_WIDTHS: ColWidths = { size: 80, mtime: 150, type: 90 };
+const MIN_COL_WIDTH = 40;
+const MAX_COL_WIDTH = 600;
+const COL_KEY_PREFIX = "newmob.sftp.cols.";
+
+function loadColWidths(side: PaneSide): ColWidths {
+  try {
+    const raw = localStorage.getItem(COL_KEY_PREFIX + side);
+    if (!raw) return DEFAULT_COL_WIDTHS;
+    const parsed = JSON.parse(raw) as Partial<ColWidths>;
+    return {
+      size: clampCol(parsed.size ?? DEFAULT_COL_WIDTHS.size),
+      mtime: clampCol(parsed.mtime ?? DEFAULT_COL_WIDTHS.mtime),
+      type: clampCol(parsed.type ?? DEFAULT_COL_WIDTHS.type),
+    };
+  } catch {
+    return DEFAULT_COL_WIDTHS;
+  }
+}
+
+function saveColWidths(side: PaneSide, widths: ColWidths): void {
+  try {
+    localStorage.setItem(COL_KEY_PREFIX + side, JSON.stringify(widths));
+  } catch {
+    /* noop */
+  }
+}
+
+function clampCol(n: number): number {
+  if (!Number.isFinite(n)) return MIN_COL_WIDTH;
+  return Math.max(MIN_COL_WIDTH, Math.min(MAX_COL_WIDTH, Math.round(n)));
+}
 
 interface FilePanelProps {
   sessionId: string;
@@ -83,8 +123,44 @@ export function FilePanel({
   const [draggingOver, setDraggingOver] = useState(false);
   const lastClickedRef = useRef<string | null>(null);
 
+  const [colWidths, setColWidths] = useState<ColWidths>(() => loadColWidths(side));
+  const dragColRef = useRef<{ key: keyof ColWidths; startX: number; startW: number } | null>(null);
+
+  const startColResize = useCallback(
+    (key: keyof ColWidths, e: MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      dragColRef.current = { key, startX: e.clientX, startW: colWidths[key] };
+      const onMove = (ev: globalThis.MouseEvent) => {
+        const ctx = dragColRef.current;
+        if (!ctx) return;
+        const next = clampCol(ctx.startW + (ev.clientX - ctx.startX));
+        setColWidths((prev) =>
+          prev[ctx.key] === next ? prev : { ...prev, [ctx.key]: next },
+        );
+      };
+      const onUp = () => {
+        dragColRef.current = null;
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+      };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    },
+    [colWidths],
+  );
+
+  useEffect(() => {
+    saveColWidths(side, colWidths);
+  }, [side, colWidths]);
+
   const pane = session?.[side];
   const showHidden = pane?.showHidden ?? false;
+  // Show the drives dropdown only on the LOCAL pane when the current path
+  // looks like a Windows path. Lets the user jump back from `C:\foo` to a
+  // list of drives (C:, D:, …) without typing the path manually.
+  const showDrivesPicker =
+    side === "local" && !!pane?.path && /^[A-Z]:/i.test(pane.path);
 
   const sortedEntries = useMemo<FileEntry[]>(() => {
     if (!pane) return [];
@@ -380,6 +456,11 @@ export function FilePanel({
       />
       <div className="h-6 flex items-center gap-1 px-1 border-b shrink-0"
         style={{ borderColor: "var(--moba-divider)" }}>
+        {showDrivesPicker && (
+          <DrivesPicker
+            onSelect={(p) => void navigate(sessionId, side, p)}
+          />
+        )}
         <PathBreadcrumb
           path={pane.path}
           homePath={side === "remote" ? session?.homeDir ?? null : null}
@@ -409,13 +490,43 @@ export function FilePanel({
             </span>
           </div>
         )}
-        <table className="w-full border-collapse">
+        <table className="w-full border-collapse" style={{ tableLayout: "fixed" }}>
+          <colgroup>
+            <col />
+            <col style={{ width: colWidths.size }} />
+            <col style={{ width: colWidths.mtime }} />
+            <col style={{ width: colWidths.type }} />
+          </colgroup>
           <thead className="sticky top-0 z-10" style={{ background: "var(--moba-quick-bg)" }}>
             <tr className="text-[11px] uppercase tracking-wide" style={{ color: "var(--moba-text-muted)" }}>
-              <SortHeader label="Name" active={sortKey === "name"} dir={sortDir} onClick={() => onHeaderClick("name")} />
-              <SortHeader label="Size" active={sortKey === "size"} dir={sortDir} onClick={() => onHeaderClick("size")} className="w-[80px] text-right" />
-              <SortHeader label="Modified" active={sortKey === "mtime"} dir={sortDir} onClick={() => onHeaderClick("mtime")} className="w-[140px]" />
-              <SortHeader label="Type" active={sortKey === "type"} dir={sortDir} onClick={() => onHeaderClick("type")} className="w-[80px]" />
+              <SortHeader
+                label="Name"
+                active={sortKey === "name"}
+                dir={sortDir}
+                onClick={() => onHeaderClick("name")}
+                onResizeStart={(e) => startColResize("size", e)}
+              />
+              <SortHeader
+                label="Size"
+                active={sortKey === "size"}
+                dir={sortDir}
+                onClick={() => onHeaderClick("size")}
+                className="text-right"
+                onResizeStart={(e) => startColResize("mtime", e)}
+              />
+              <SortHeader
+                label="Modified"
+                active={sortKey === "mtime"}
+                dir={sortDir}
+                onClick={() => onHeaderClick("mtime")}
+                onResizeStart={(e) => startColResize("type", e)}
+              />
+              <SortHeader
+                label="Type"
+                active={sortKey === "type"}
+                dir={sortDir}
+                onClick={() => onHeaderClick("type")}
+              />
             </tr>
           </thead>
           <tbody>
@@ -450,20 +561,22 @@ export function FilePanel({
                 onContextMenu={(e) => handleRowContext(entry, e)}
                 title={entry.path}
               >
-                <td className="px-1.5 py-0.5 flex items-center gap-1 truncate">
-                  <FileTypeIcon entry={entry} />
-                  <span className="truncate">{entry.name}</span>
-                  {entry.symlinkTarget && (
-                    <span className="text-[10px] text-[var(--moba-text-muted)]">→ {entry.symlinkTarget}</span>
-                  )}
+                <td className="px-1.5 py-0.5 truncate">
+                  <div className="flex items-center gap-1 min-w-0">
+                    <FileTypeIcon entry={entry} />
+                    <span className="truncate">{entry.name}</span>
+                    {entry.symlinkTarget && (
+                      <span className="truncate text-[10px] text-[var(--moba-text-muted)]">→ {entry.symlinkTarget}</span>
+                    )}
+                  </div>
                 </td>
-                <td className="px-1.5 py-0.5 text-right text-[var(--moba-text-muted)]">
+                <td className="px-1.5 py-0.5 text-right text-[var(--moba-text-muted)] truncate">
                   {entry.fileType === "dir" ? "" : formatBytes(entry.size)}
                 </td>
-                <td className="px-1.5 py-0.5 text-[var(--moba-text-muted)]">
+                <td className="px-1.5 py-0.5 text-[var(--moba-text-muted)] truncate">
                   {entry.mtime ? new Date(entry.mtime * 1000).toLocaleString() : ""}
                 </td>
-                <td className="px-1.5 py-0.5 text-[var(--moba-text-muted)]">
+                <td className="px-1.5 py-0.5 text-[var(--moba-text-muted)] truncate">
                   {entry.fileType === "dir"
                     ? "folder"
                     : (entry.name.split(".").pop() ?? "").toLowerCase()}
@@ -490,21 +603,125 @@ function SortHeader({
   dir,
   onClick,
   className,
+  onResizeStart,
 }: {
   label: string;
   active: boolean;
   dir: "asc" | "desc";
   onClick: () => void;
   className?: string;
+  /** When set, renders a 4-px drag handle on the right edge that resizes
+   *  the *next* column. Omit on the last column. */
+  onResizeStart?: (e: MouseEvent) => void;
 }) {
   return (
     <th
-      className={`text-left px-1.5 py-0.5 cursor-pointer select-none border-b ${className ?? ""}`}
+      className={`text-left px-1.5 py-0.5 cursor-pointer select-none border-b relative ${className ?? ""}`}
       style={{ borderColor: "var(--moba-divider)" }}
       onClick={onClick}
     >
-      {label} {active ? (dir === "asc" ? "▲" : "▼") : ""}
+      <span className="truncate inline-block align-bottom max-w-full">
+        {label} {active ? (dir === "asc" ? "▲" : "▼") : ""}
+      </span>
+      {onResizeStart && (
+        <span
+          role="separator"
+          aria-orientation="vertical"
+          title="Drag to resize column"
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={onResizeStart}
+          className="absolute top-0 right-0 h-full w-[5px] cursor-col-resize hover:bg-[var(--moba-accent)]"
+          style={{ zIndex: 1 }}
+        />
+      )}
     </th>
+  );
+}
+
+function DrivesPicker({ onSelect }: { onSelect: (path: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [drives, setDrives] = useState<DriveEntry[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const list = await sftpLocalDrives();
+      setDrives(list);
+    } catch {
+      setDrives([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    if (!drives) void refresh();
+    const onDoc = (e: globalThis.MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    window.addEventListener("mousedown", onDoc);
+    return () => window.removeEventListener("mousedown", onDoc);
+  }, [open, drives, refresh]);
+
+  return (
+    <div ref={wrapRef} className="relative shrink-0">
+      <button
+        type="button"
+        title="Switch drive"
+        className="h-5 px-1 inline-flex items-center gap-0.5 rounded hover:bg-[var(--moba-hover)] text-[11px]"
+        onClick={() => setOpen((v) => !v)}
+        style={{ color: "var(--moba-text-muted)" }}
+      >
+        <HardDrive className="w-3 h-3" />
+        <ChevronDown className="w-3 h-3" />
+      </button>
+      {open && (
+        <div
+          className="absolute top-full left-0 mt-0.5 z-50 min-w-[160px] py-1 text-[12px] shadow-lg rounded"
+          style={{
+            background: "var(--moba-bg)",
+            border: "1px solid var(--moba-divider)",
+            color: "var(--moba-text)",
+          }}
+        >
+          {loading && (
+            <div className="px-2 py-1 text-[var(--moba-text-muted)]">Loading…</div>
+          )}
+          {!loading && drives && drives.length === 0 && (
+            <div className="px-2 py-1 text-[var(--moba-text-muted)]">
+              No drives reported
+            </div>
+          )}
+          {!loading &&
+            drives?.map((d) => (
+              <button
+                key={d.id}
+                type="button"
+                className="w-full text-left px-2 py-1 hover:bg-[var(--moba-hover)] flex items-center gap-1.5"
+                onClick={() => {
+                  onSelect(d.path);
+                  setOpen(false);
+                }}
+                title={d.path}
+              >
+                <HardDrive className="w-3 h-3 shrink-0" />
+                <span className="truncate">{d.label}</span>
+                <span
+                  className="ml-auto text-[10px]"
+                  style={{ color: "var(--moba-text-muted)" }}
+                >
+                  {d.path}
+                </span>
+              </button>
+            ))}
+        </div>
+      )}
+    </div>
   );
 }
 
