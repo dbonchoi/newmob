@@ -106,14 +106,14 @@ async function listSide(
     // the standard file-list UI (sort, double-click to enter, etc.) works
     // unchanged for the virtual drives root.
     const drives = await sftpLocalDrives();
-    return drives.map((d) => ({
+    return drives.map<FileEntry>((d) => ({
       name: d.label,
       path: d.path,
-      fileType: "dir" as const,
+      fileType: "dir",
       size: 0,
       mtime: 0,
       mode: 0,
-      symlinkTarget: null,
+      isHidden: false,
     }));
   }
   return side === "remote"

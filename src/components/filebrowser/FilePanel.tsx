@@ -14,13 +14,14 @@ import {
 } from "../../lib/sftp";
 
 interface ColWidths {
+  name: number;
   size: number;
   mtime: number;
   type: number;
 }
-const DEFAULT_COL_WIDTHS: ColWidths = { size: 80, mtime: 150, type: 90 };
+const DEFAULT_COL_WIDTHS: ColWidths = { name: 280, size: 80, mtime: 150, type: 90 };
 const MIN_COL_WIDTH = 40;
-const MAX_COL_WIDTH = 600;
+const MAX_COL_WIDTH = 800;
 const COL_KEY_PREFIX = "newmob.sftp.cols.";
 
 function loadColWidths(side: PaneSide): ColWidths {
@@ -29,6 +30,7 @@ function loadColWidths(side: PaneSide): ColWidths {
     if (!raw) return DEFAULT_COL_WIDTHS;
     const parsed = JSON.parse(raw) as Partial<ColWidths>;
     return {
+      name: clampCol(parsed.name ?? DEFAULT_COL_WIDTHS.name),
       size: clampCol(parsed.size ?? DEFAULT_COL_WIDTHS.size),
       mtime: clampCol(parsed.mtime ?? DEFAULT_COL_WIDTHS.mtime),
       type: clampCol(parsed.type ?? DEFAULT_COL_WIDTHS.type),
@@ -496,9 +498,20 @@ export function FilePanel({
             </span>
           </div>
         )}
-        <table className="w-full border-collapse" style={{ tableLayout: "fixed" }}>
+        <table
+          className="border-collapse"
+          // Use max(100%, sumOfWidths) so the table always fills the
+          // pane horizontally but can also exceed it (with horizontal
+          // scroll on the wrapper) when the user enlarges columns.
+          style={{
+            tableLayout: "fixed",
+            width: `max(100%, ${
+              colWidths.name + colWidths.size + colWidths.mtime + colWidths.type
+            }px)`,
+          }}
+        >
           <colgroup>
-            <col />
+            <col style={{ width: colWidths.name }} />
             <col style={{ width: colWidths.size }} />
             <col style={{ width: colWidths.mtime }} />
             <col style={{ width: colWidths.type }} />
@@ -510,8 +523,8 @@ export function FilePanel({
                 active={sortKey === "name"}
                 dir={sortDir}
                 onClick={() => onHeaderClick("name")}
-                onResizeStart={(e) => startColResize("size", e)}
-                onResizeReset={() => resetCol("size")}
+                onResizeStart={(e) => startColResize("name", e)}
+                onResizeReset={() => resetCol("name")}
               />
               <SortHeader
                 label="Size"
@@ -519,22 +532,24 @@ export function FilePanel({
                 dir={sortDir}
                 onClick={() => onHeaderClick("size")}
                 className="text-right"
-                onResizeStart={(e) => startColResize("mtime", e)}
-                onResizeReset={() => resetCol("mtime")}
+                onResizeStart={(e) => startColResize("size", e)}
+                onResizeReset={() => resetCol("size")}
               />
               <SortHeader
                 label="Modified"
                 active={sortKey === "mtime"}
                 dir={sortDir}
                 onClick={() => onHeaderClick("mtime")}
-                onResizeStart={(e) => startColResize("type", e)}
-                onResizeReset={() => resetCol("type")}
+                onResizeStart={(e) => startColResize("mtime", e)}
+                onResizeReset={() => resetCol("mtime")}
               />
               <SortHeader
                 label="Type"
                 active={sortKey === "type"}
                 dir={sortDir}
                 onClick={() => onHeaderClick("type")}
+                onResizeStart={(e) => startColResize("type", e)}
+                onResizeReset={() => resetCol("type")}
               />
             </tr>
           </thead>

@@ -122,12 +122,12 @@ describe("SFTP file-list column width persistence", () => {
       />,
     );
 
-    const nameHandle = document.querySelector(
-      '[data-testid="col-resize-name"]',
+    const sizeHandle = document.querySelector(
+      '[data-testid="col-resize-size"]',
     ) as HTMLElement;
-    expect(nameHandle).toBeTruthy();
+    expect(sizeHandle).toBeTruthy();
 
-    fireEvent.mouseDown(nameHandle, { clientX: 200 });
+    fireEvent.mouseDown(sizeHandle, { clientX: 200 });
     fireEvent(window, new MouseEvent("mousemove", { clientX: 250 }));
     fireEvent(window, new MouseEvent("mouseup"));
 
@@ -156,12 +156,12 @@ describe("SFTP file-list column width persistence", () => {
     expect(reloaded.size).toBe(stored.size);
   });
 
-  it("double-clicking a resize handle restores the affected column to its default width", () => {
+  it("double-clicking a resize handle restores that column to its default width", () => {
     seed();
-    // Pre-seed a non-default width.
+    // Pre-seed all four columns with a non-default width.
     localStorage.setItem(
       "newmob.sftp.cols.remote",
-      JSON.stringify({ size: 240, mtime: 240, type: 240 }),
+      JSON.stringify({ name: 400, size: 240, mtime: 240, type: 240 }),
     );
 
     render(
@@ -174,17 +174,18 @@ describe("SFTP file-list column width persistence", () => {
       />,
     );
 
-    const nameHandle = document.querySelector(
-      '[data-testid="col-resize-name"]',
+    const sizeHandle = document.querySelector(
+      '[data-testid="col-resize-size"]',
     ) as HTMLElement;
-    fireEvent.doubleClick(nameHandle);
+    fireEvent.doubleClick(sizeHandle);
 
     const stored = JSON.parse(
       localStorage.getItem("newmob.sftp.cols.remote") ?? "{}",
     );
-    // Name handle resets the *next* column (Size). Default is 80.
+    // Each handle resets ITS OWN column. Size default is 80.
     expect(stored.size).toBe(80);
     // Other columns are untouched.
+    expect(stored.name).toBe(400);
     expect(stored.mtime).toBe(240);
     expect(stored.type).toBe(240);
   });
@@ -236,8 +237,8 @@ describe("sftpController.download empty-local-dir fallback", () => {
 
     expect(sftpHomeMock).toHaveBeenCalledTimes(1);
     expect(sftpDownloadMock).toHaveBeenCalledTimes(1);
-    const [, , , localPath] = sftpDownloadMock.mock.calls[0];
-    expect(localPath).toBe("/home/me/remote.txt");
+    const args = sftpDownloadMock.mock.calls[0] as unknown as unknown[];
+    expect(args[3]).toBe("/home/me/remote.txt");
     expect(setStatusMock).not.toHaveBeenCalledWith(
       expect.stringContaining("Download failed"),
     );
