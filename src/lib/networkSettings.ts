@@ -34,8 +34,11 @@ export const DEFAULT_NETWORK_SETTINGS: NetworkSettings = {
   proxySaveAuth: false,
   keepAlive: true,
   keepAliveIntervalSecs: "60",
+  // Backend honours `tcpNodelay` only; `disableNagle` is the
+  // inverse-named UI mirror and is kept synchronized so saved sessions
+  // can never carry contradictory values.
   tcpNodelay: true,
-  disableNagle: false,
+  disableNagle: true,
   ipVersion: "auto",
   localForwards: [],
 };
@@ -125,7 +128,14 @@ export function normalizeNetworkSettings(input: unknown): NetworkSettings {
     keepAlive: readBoolean(src.keepAlive, DEFAULT_NETWORK_SETTINGS.keepAlive),
     keepAliveIntervalSecs: readString(src.keepAliveIntervalSecs, DEFAULT_NETWORK_SETTINGS.keepAliveIntervalSecs),
     tcpNodelay: readBoolean(src.tcpNodelay, DEFAULT_NETWORK_SETTINGS.tcpNodelay),
-    disableNagle: readBoolean(src.disableNagle, DEFAULT_NETWORK_SETTINGS.disableNagle),
+    // `disableNagle` is the UI mirror of `tcpNodelay`; if the persisted
+    // value is missing, force it to track `tcpNodelay`. If both are
+    // present but contradict each other (older saved sessions), trust
+    // `tcpNodelay` since that is the value the backend actually honours.
+    disableNagle:
+      src.disableNagle === undefined || src.disableNagle === null
+        ? readBoolean(src.tcpNodelay, DEFAULT_NETWORK_SETTINGS.tcpNodelay)
+        : readBoolean(src.tcpNodelay, DEFAULT_NETWORK_SETTINGS.tcpNodelay),
     ipVersion: (IP_LABEL_TO_KIND[ipVersionRaw] ?? (ipVersionRaw as IpVersion)) || "auto",
     localForwards: normalizeForwards(src.localForwards),
   };
