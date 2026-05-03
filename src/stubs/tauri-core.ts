@@ -237,6 +237,10 @@ export async function invoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
       })) as T;
     }
     case "test_ssh_connection": {
+      // The browser preview can't honour proxy / port-forwarding rows
+      // either; we ignore `networkSettingsJson` here for symmetry with
+      // `create_ssh_terminal` so testing a session in web preview
+      // exercises the same path the spawned terminal will take.
       return (await sshTest({
         host: args?.host as string,
         port: (args?.port as number) || 22,

@@ -606,10 +606,16 @@ function NetworkSettings({
 
       <Field label="TCP options">
         <label className="flex items-center gap-1.5">
-          <Checkbox checked={tcpNodelay} onChange={setTcpNodelay} /> TCP_NODELAY
+          <Checkbox
+            checked={tcpNodelay}
+            onChange={(v) => patch({ tcpNodelay: v, disableNagle: v })}
+          /> TCP_NODELAY
         </label>
         <label className="ml-3 flex items-center gap-1.5">
-          <Checkbox checked={disableNagle} onChange={setDisableNagle} /> Disable Nagle algorithm
+          <Checkbox
+            checked={disableNagle}
+            onChange={(v) => patch({ disableNagle: v, tcpNodelay: v })}
+          /> Disable Nagle algorithm
         </label>
       </Field>
 
