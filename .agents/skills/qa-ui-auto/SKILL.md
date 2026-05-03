@@ -21,9 +21,9 @@ This skill is designed to run inside coding-agent CLIs (Claude Code, Codex, etc.
 NewMob ships in two runnable forms (see `replit.md` and the tech doc):
 
 1. **Browser dev mode** — `pnpm run dev` on port `5000`. Vite serves the React UI and the `sshProxy` / `sftpProxy` plugins implement the SSH/SFTP backend in Node, with `src/stubs/*` shimming the Tauri APIs. This mode is **headless-CI-friendly** and is the primary target for automation: a real browser drives the same React UI shipped in the desktop binary.
-2. **Native Tauri build** — `pnpm tauri build --debug` then run the binary. The webview is OS-native (WebView2 on Windows, WKWebView on macOS, WebKitGTK on Linux). Playwright cannot attach to those webviews directly — for native runs we launch the binary under the OS display (Xvfb/VNC on Linux), and let Playwright drive a parallel Chromium pointed at the same dev server, while a thin Python harness verifies the native process is alive and captures screenshots via the OS (scrot / screencapture / nircmd).
+2. **Native Tauri WebDriver mode** — `pnpm tauri build --debug --no-bundle` (or `cargo tauri build --debug --no-bundle`) then drive the real debug binary through `tauri-driver`. This mode tests the actual native WebView and Tauri/Rust IPC backend. On Windows it requires `msedgedriver.exe` matching the installed Edge/WebView2 runtime; on Linux it requires `WebKitWebDriver` and a display. macOS desktop WebDriver is not supported by Tauri because WKWebView has no desktop WebDriver tool.
 
-Default mode is `browser`. Use `--mode native` only when the user explicitly asks to test the packaged binary.
+Default mode is `browser`. Use `--mode native` when the user explicitly asks to test real Tauri rendering, Rust commands, or native backend behavior.
 
 The reason we use `playwright-cli` (not the Playwright test runner) is token efficiency: the coding agent can issue concise CLI commands without loading the Playwright API surface or accessibility trees. See `references/playwright-cli.md` for the command cheatsheet.
 
@@ -37,6 +37,7 @@ The reason we use `playwright-cli` (not the Playwright test runner) is token eff
 │   ├── parse_testcases.py        ← parses testcase-for-auto.md into steps
 │   ├── env_check.py              ← verifies node/pnpm/playwright-cli/python deps
 │   ├── probe.py                  ← detects missing services and prints how to start them
+│   ├── tauri_webdriver.py        ← minimal W3C WebDriver client for native Tauri
 │   └── fixtures.py               ← spins up local SFTP/SSH if config requests it
 ├── assets/
 │   ├── testcase-for-auto.template.md  ← canonical template (regenerated each run)
@@ -54,27 +55,34 @@ Test cases and config live at the **project root**, not inside the skill, so use
 
 ## Workflow (always follow this order)
 
-1. **Preflight tooling.** Run `python .agents/skills/qa-ui-auto/scripts/env_check.py`. It checks/installs:
-   - `node >= 18`, `pnpm`, project deps (`pnpm install` if missing).
-   - `playwright-cli` globally: `npm install -g @playwright/cli@latest` if `playwright-cli --version` fails.
-   - Browsers: `playwright-cli install chromium`.
-   - Python deps: `pyyaml`. Install with `pip install pyyaml` if missing.
+1. **Preflight tooling.**
+   - Browser mode: run `python .agents/skills/qa-ui-auto/scripts/env_check.py --mode browser`. It checks/installs:
+     - `node >= 18`, `pnpm`, project deps (`pnpm install` if missing).
+     - `playwright-cli` globally: `npm install -g @playwright/cli@latest` if `playwright-cli --version` fails.
+     - Browsers: `playwright-cli install chromium`.
+     - Python deps: `pyyaml`. Install with `pip install pyyaml` if missing.
+   - Native mode: run `python .agents/skills/qa-ui-auto/scripts/env_check.py --mode native`. It checks only; it does not install automatically. It verifies `cargo`, `tauri-driver`, the Tauri debug binary, and platform WebDriver dependencies. If `tauri-driver` is missing, ask the user whether to run `cargo install tauri-driver --locked`. If the debug binary is missing, ask whether to run `cargo tauri build --debug --no-bundle` (or `pnpm tauri build --debug --no-bundle`). On Windows, `msedgedriver.exe` must be on PATH or configured as `webdriver.native_driver`; do not auto-install it because it must match the local Edge/WebView2 runtime.
 2. **Load config.** Read `qa-ui-auto.config.yaml`. If absent, copy the example and tell the user which fields to fill in (host/port/user/password or key path for SSH, SFTP). Never invent credentials. If the user supplies secrets in chat, write them via the environment-secrets skill, not the YAML, and reference them as `${env:VAR_NAME}`.
 3. **(Re)generate `testcase-for-auto.md`.** See "Regeneration policy" below. The file must always exist before tests run.
 4. **Probe required services.** `run_tests.py` automatically calls `probe.py` after parsing test cases. The probe checks only what the active cases need:
    - Browser mode → Vite dev server reachable at `app.base_url`.
-   - Native mode → Tauri debug binary built; on Linux, a `DISPLAY` is set.
+   - Native mode → Tauri debug binary built; `tauri-driver` available; platform WebDriver available; on Linux, a `DISPLAY` is set.
    - SSH/SFTP host:port reachable (only if any case references `${cfg:ssh.*}` or `${cfg:sftp.*}`).
-   - Tooling (`pnpm`, `playwright-cli`) on PATH.
+   - Tooling (`pnpm`, `playwright-cli`) on PATH for browser mode; `tauri-driver` and platform WebDriver tooling for native mode.
    When something is missing, the probe prints a short, copy-pasteable startup recipe and `run_tests.py` exits with code `2` **without** running any tests. You can also probe manually: `python .agents/skills/qa-ui-auto/scripts/probe.py --mode browser`.
    When the user reports the probe failing, do not silently start services for them — surface the printed recipe verbatim and ask whether to start the listed workflow / Docker container.
-5. **Run.** `python .agents/skills/qa-ui-auto/scripts/run_tests.py --mode browser` (or `--mode native`). The runner:
+5. **Run.** `python .agents/skills/qa-ui-auto/scripts/run_tests.py --mode browser` or `python .agents/skills/qa-ui-auto/scripts/run_tests.py --mode native`. The browser runner:
    - Parses `testcase-for-auto.md` into ordered cases and steps.
    - For each case, opens a fresh browser context: `playwright-cli open http://localhost:5000 --user-data-dir qa-ui-auto-report/profile-<case>`.
    - Executes each step as a `playwright-cli` command (`click`, `type`, `press`, `expect`, `screenshot`).
    - On failure, captures a screenshot + the page HTML into `qa-ui-auto-report/<case>/`.
    - Writes `qa-ui-auto-report/summary.json` and a Markdown summary.
+   The native runner starts or connects to `tauri-driver` at `webdriver.host:webdriver.port`, creates one Tauri WebDriver session per case with `tauri:options.application`, drives the real native WebView through W3C WebDriver, captures screenshots through WebDriver, and writes the same report format.
 6. **Report.** Print the Markdown summary to stdout. Exit non-zero if any case failed so the parent agent loop can react.
+7. **Failure artifacts.** For every failed case, inspect and report the artifacts listed under that failed step in `summary.md`.
+   - Browser mode captures failure screenshot, DOM snapshot, console output from `playwright-cli console`, and page HTML where available.
+   - Native mode captures failure screenshot, page HTML, a JSON file containing the injected in-page console buffer (`console.log/info/warn/error/debug`, `window.error`, `unhandledrejection`) and basic runtime state such as `window.__TAURI__` availability.
+   - Native mode also lists `tauri-driver.out.log` and `tauri-driver.err.log` in the run artifacts. Treat these as backend/native-driver logs; Tauri/Rust process output normally flows through the driver-launched process. If the Rust app exits early or WebDriver cannot create a session, surface the tail of these logs in the final answer.
 
 ## Regeneration policy for `testcase-for-auto.md`
 
@@ -113,6 +121,13 @@ See `assets/qa-ui-auto.config.example.yaml` for the full schema. Minimal:
 app:
   base_url: http://localhost:5000
   mode: browser            # browser | native
+  native_binary: ./src-tauri/target/debug/newmob.exe
+webdriver:
+  host: 127.0.0.1
+  port: 4444
+  tauri_driver: tauri-driver
+  native_driver: C:/path/to/msedgedriver.exe
+  startup_timeout: 20
 ssh:
   host: 127.0.0.1
   port: 2222
@@ -132,9 +147,9 @@ report:
 
 ## Cross-platform notes
 
-- **Linux (CI / Replit):** browser mode runs headless Chromium fine. Native mode needs Xvfb or the existing `VNC Server` workflow up.
-- **macOS:** native runs use `open` to launch `.app`; screenshots via `screencapture`.
-- **Windows:** native binary is `.exe`; screenshots via `nircmd` if available, else PowerShell `Add-Type` snippet (handled by `fixtures.py`).
+- **Linux (CI / Replit):** browser mode runs headless Chromium fine. Native mode needs `tauri-driver`, `WebKitWebDriver`, and Xvfb or the existing `VNC Server` workflow up.
+- **macOS:** browser mode is supported. Tauri desktop WebDriver is not available because WKWebView has no desktop WebDriver tool.
+- **Windows:** native binary is `.exe`; native mode requires `tauri-driver` plus `msedgedriver.exe` matching Edge/WebView2.
 - The runner detects the platform with `platform.system()` — never hard-code paths.
 
 ## Failure handling

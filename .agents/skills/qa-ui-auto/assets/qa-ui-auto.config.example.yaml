@@ -5,7 +5,14 @@
 app:
   base_url: http://localhost:5000   # Vite dev server in browser mode
   mode: browser                     # browser | native
-  # native_binary: ./src-tauri/target/debug/newmob   # used when mode=native
+  # native_binary: ./src-tauri/target/debug/newmob.exe   # used when mode=native on Windows
+
+webdriver:
+  host: 127.0.0.1
+  port: 4444
+  tauri_driver: tauri-driver        # cargo install tauri-driver --locked
+  # native_driver: C:/path/to/msedgedriver.exe  # optional; otherwise PATH
+  startup_timeout: 20
 
 ssh:
   host: 127.0.0.1

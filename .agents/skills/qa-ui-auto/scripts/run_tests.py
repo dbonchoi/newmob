@@ -29,8 +29,9 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from parse_testcases import TestCase, parse, resolve_step  # noqa: E402
+from parse_testcases import Step, TestCase, parse, resolve_step  # noqa: E402
 from probe import probe, report as probe_report  # noqa: E402
+from tauri_webdriver import NativeHarness, WebDriverError  # noqa: E402
 
 ROOT = Path.cwd()
 DEFAULT_TESTCASES = ROOT / "testcase-for-auto.md"
@@ -118,7 +119,7 @@ def _session(report_dir: Path) -> str:
     return f"qa-ui-auto-{report_dir.name.lower()}"
 
 
-def dispatch(step, profile_dir: Path, report_dir: Path) -> tuple[bool, str]:
+def browser_dispatch(step, profile_dir: Path, report_dir: Path) -> tuple[bool, str]:
     """Execute one step via playwright-cli. Returns (ok, message)."""
     v = step.verb
     a = step.args
@@ -197,9 +198,135 @@ def dispatch(step, profile_dir: Path, report_dir: Path) -> tuple[bool, str]:
         return False, f"exception: {e}"
 
 
+def browser_collect_failure(profile_dir: Path, report_dir: Path,
+                            step_index: int) -> list[str]:
+    artifacts: list[str] = []
+    snapshot = report_dir / f"_failure-step{step_index}.snapshot.md"
+    console = report_dir / f"_failure-step{step_index}.console.txt"
+    html = report_dir / f"_failure-step{step_index}.html"
+    session = _session(report_dir)
+    commands = [
+        (snapshot, [f"-s={session}", "snapshot", "--filename", str(snapshot)]),
+        (console, [f"-s={session}", "console"]),
+        (
+            html,
+            [
+                f"-s={session}",
+                "run-code",
+                "async page => document.documentElement.outerHTML",
+                "--raw",
+            ],
+        ),
+    ]
+    for target, args in commands:
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            r = _pw(args, profile_dir)
+            output = (r.stdout + r.stderr).strip()
+            if args[1] != "snapshot":
+                target.write_text(output, encoding="utf-8")
+            if target.exists():
+                artifacts.append(str(target))
+        except Exception:
+            continue
+    return artifacts
+
+
+def native_dispatch(session, step: Step, report_dir: Path) -> tuple[bool, str]:
+    v = step.verb
+    a = step.args
+    try:
+        if v in ("open", "goto"):
+            # The native WebDriver session launches the Tauri application.
+            # Navigating the embedded WebView away from its app URL would bypass
+            # the runtime we are explicitly trying to test.
+            return True, "native app launched by tauri-driver"
+        if v == "click":
+            return True, session.click(a[0])
+        if v == "dblclick":
+            session.click(a[0])
+            return True, session.click(a[0])
+        if v == "type":
+            return True, session.send_keys(a[0])
+        if v == "fill":
+            return True, session.fill(a[0], a[1])
+        if v == "press":
+            return True, session.send_keys(a[0])
+        if v == "select":
+            script = (
+                "const el = document.querySelector(arguments[0]);"
+                "if (!el) throw new Error('select target not found');"
+                "el.value = arguments[1];"
+                "el.dispatchEvent(new Event('change', { bubbles: true }));"
+                "return true;"
+            )
+            session.execute(script.replace("arguments[0]", json.dumps(a[0]))
+                            .replace("arguments[1]", json.dumps(a[1])))
+            return True, f"selected {a[1]}"
+        if v == "wait_for":
+            session.find(a[0])
+            return True, f"visible {a[0]}"
+        if v in ("wait", "sleep"):
+            time.sleep(float(a[0]))
+            return True, f"slept {a[0]}s"
+        if v == "expect_visible":
+            session.find(a[0])
+            return True, f"visible {a[0]}"
+        if v == "expect_text":
+            text = session.text(a[0])
+            if a[1] not in text:
+                return False, f"expected text to include {a[1]!r}, got {text!r}"
+            return True, f"text includes {a[1]}"
+        if v == "expect_url":
+            url = session.execute("return window.location.href")
+            if a[0] not in str(url):
+                return False, f"expected URL to include {a[0]!r}, got {url!r}"
+            return True, f"url includes {a[0]}"
+        if v == "screenshot":
+            target = report_dir / (a[0] if a else "screenshot.png")
+            return True, session.screenshot(target)
+        if v == "eval":
+            return True, str(session.execute(a[0]))
+        return False, f"unknown verb {v}"
+    except WebDriverError as e:
+        return False, str(e)
+    except Exception as e:
+        return False, f"exception: {e}"
+
+
+def native_collect_failure(session, report_dir: Path, step_index: int) -> list[str]:
+    artifacts: list[str] = []
+    captures = [
+        (
+            report_dir / f"_failure-step{step_index}.console.json",
+            """
+            return JSON.stringify({
+              href: window.location.href,
+              title: document.title,
+              console: window.__QA_UI_AUTO_CONSOLE__ || [],
+              tauriAvailable: typeof window.__TAURI__ !== 'undefined',
+              bodyText: document.body ? document.body.innerText : ''
+            }, null, 2)
+            """,
+        ),
+        (
+            report_dir / f"_failure-step{step_index}.html",
+            "return document.documentElement ? document.documentElement.outerHTML : ''",
+        ),
+    ]
+    for target, script in captures:
+        try:
+            target.write_text(str(session.execute(script)), encoding="utf-8")
+            artifacts.append(str(target))
+        except Exception:
+            continue
+    return artifacts
+
+
 # ─── runner ──────────────────────────────────────────────────────────────────
 
-def run_case(case: TestCase, cfg: dict, env: dict, report_root: Path) -> dict:
+def run_case(case: TestCase, cfg: dict, env: dict, report_root: Path,
+             dispatcher, failure_collector=None) -> dict:
     case_dir = report_root / case.id
     case_dir.mkdir(parents=True, exist_ok=True)
     profile_dir = case_dir / "profile"
@@ -215,23 +342,30 @@ def run_case(case: TestCase, cfg: dict, env: dict, report_root: Path) -> dict:
                               "msg": f"placeholder error: {e}"})
             failed = True
             break
-        ok, msg = dispatch(step, profile_dir, case_dir)
+        ok, msg = dispatcher(step, profile_dir, case_dir)
         steps_log.append({"i": i, "raw": raw_step.raw, "ok": ok, "msg": msg})
         status = "✓" if ok else "✗"
         log(f"  {status} {i:02d} {raw_step.raw} — {msg}")
         if not ok:
             failed = True
             # Always capture failure screenshot
-            dispatch(type(raw_step)("screenshot",
-                                    [f"_failure-step{i}.png"],
-                                    f"screenshot _failure-step{i}.png"),
-                     profile_dir, case_dir)
+            dispatcher(type(raw_step)("screenshot",
+                                      [f"_failure-step{i}.png"],
+                                      f"screenshot _failure-step{i}.png"),
+                       profile_dir, case_dir)
+            artifacts = []
+            if failure_collector:
+                artifacts = failure_collector(profile_dir, case_dir, i)
+            if artifacts:
+                steps_log[-1]["artifacts"] = artifacts
+                log(f"    artifacts: {', '.join(artifacts)}")
             break
     return {"id": case.id, "title": case.title, "tags": case.tags,
             "passed": not failed, "steps": steps_log}
 
 
-def write_report(report_root: Path, results: list[dict]) -> None:
+def write_report(report_root: Path, results: list[dict],
+                 extra_artifacts: list[Path] | None = None) -> None:
     report_root.mkdir(parents=True, exist_ok=True)
     (report_root / "summary.json").write_text(
         json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -239,14 +373,28 @@ def write_report(report_root: Path, results: list[dict]) -> None:
           f"_generated: {datetime.now().isoformat(timespec='seconds')}_", ""]
     passed = sum(1 for r in results if r["passed"])
     md.append(f"**{passed}/{len(results)} passed**\n")
+    existing_extras = [p for p in (extra_artifacts or []) if p.exists()]
+    if existing_extras:
+        md.append("## Run artifacts")
+        for path in existing_extras:
+            md.append(f"- `{path}`")
+        md.append("")
     for r in results:
         icon = "✅" if r["passed"] else "❌"
         md.append(f"## {icon} {r['id']}: {r['title']}")
         for s in r["steps"]:
             si = "✓" if s["ok"] else "✗"
             md.append(f"- `{si}` {s['raw']} — {s['msg']}")
+            for artifact in s.get("artifacts", []):
+                md.append(f"  - artifact: `{artifact}`")
         md.append("")
     (report_root / "summary.md").write_text("\n".join(md), encoding="utf-8")
+
+
+def case_matches_mode(case: TestCase, mode: str) -> bool:
+    declared = (case.mode or "browser").lower()
+    modes = {part.strip() for part in declared.split(",") if part.strip()}
+    return not modes or "all" in modes or mode in modes
 
 
 def main() -> int:
@@ -270,6 +418,7 @@ def main() -> int:
         cases = [c for c in cases if c.id in wanted]
     if args.tag:
         cases = [c for c in cases if args.tag in c.tags]
+    cases = [c for c in cases if case_matches_mode(c, args.mode)]
     if not cases:
         log("no test cases selected")
         return 2
@@ -287,11 +436,11 @@ def main() -> int:
         if not wait_for_url(base_url, timeout=10):
             issues = probe(cfg, args.mode,
                            need_ssh=need_ssh, need_sftp=need_sftp)
-            return probe_report(issues) or 2
+            return probe_report(issues, args.mode) or 2
 
     issues = probe(cfg, args.mode, need_ssh=need_ssh, need_sftp=need_sftp)
     if issues:
-        return probe_report(issues)
+        return probe_report(issues, args.mode)
 
     report_root = Path(cfg.get("report", {}).get("dir", "qa-ui-auto-report"))
     if report_root.exists():
@@ -314,18 +463,43 @@ def main() -> int:
 
     env = dict(os.environ)
     results = []
-    for c in cases:
-        try:
-            results.append(run_case(c, cfg, env, report_root))
-        except Exception:
-            (report_root / "error.log").write_text(traceback.format_exc(),
-                                                    encoding="utf-8")
-            log(f"unhandled error in {c.id}; see error.log")
-            results.append({"id": c.id, "title": c.title, "tags": c.tags,
-                            "passed": False, "steps": [],
-                            "error": "see error.log"})
+    if args.mode == "native":
+        with NativeHarness(cfg, report_root) as harness:
+            for c in cases:
+                session = None
+                try:
+                    session = harness.create_session()
+                    dispatcher = lambda step, _profile, case_dir, s=session: native_dispatch(s, step, case_dir)
+                    collector = lambda _profile, case_dir, i, s=session: native_collect_failure(s, case_dir, i)
+                    results.append(run_case(c, cfg, env, report_root, dispatcher, collector))
+                except Exception:
+                    (report_root / "error.log").write_text(traceback.format_exc(),
+                                                            encoding="utf-8")
+                    log(f"unhandled error in {c.id}; see error.log")
+                    results.append({"id": c.id, "title": c.title, "tags": c.tags,
+                                    "passed": False, "steps": [],
+                                    "error": "see error.log"})
+                finally:
+                    if session:
+                        session.close()
+    else:
+        for c in cases:
+            try:
+                results.append(run_case(c, cfg, env, report_root, browser_dispatch,
+                                        browser_collect_failure))
+            except Exception:
+                (report_root / "error.log").write_text(traceback.format_exc(),
+                                                        encoding="utf-8")
+                log(f"unhandled error in {c.id}; see error.log")
+                results.append({"id": c.id, "title": c.title, "tags": c.tags,
+                                "passed": False, "steps": [],
+                                "error": "see error.log"})
 
-    write_report(report_root, results)
+    extras = []
+    if args.mode == "native":
+        extras = [report_root / "tauri-driver.out.log",
+                  report_root / "tauri-driver.err.log"]
+    write_report(report_root, results, extras)
     summary = (report_root / "summary.md").read_text(encoding="utf-8")
     print("\n" + summary)
     return 0 if all(r["passed"] for r in results) else 1

@@ -1,23 +1,39 @@
+# qa-ui-auto configuration
+# Secrets MUST come from environment variables: ${env:VAR_NAME}.
+
 app:
   base_url: http://localhost:5000
   mode: browser
+  # native_binary: ./src-tauri/target/debug/newmob
+
+webdriver:
+  host: 127.0.0.1
+  port: 4444
+  tauri_driver: tauri-driver
+  # native_driver: C:/path/to/msedgedriver.exe
+  startup_timeout: 20
 
 ssh:
   host: 127.0.0.1
   port: 2222
   user: testuser
   password: ${env:QA_SSH_PASSWORD}
+  # private_key_path: ~/.ssh/id_ed25519
+  # private_key_passphrase: ${env:QA_SSH_KEY_PASSPHRASE}
 
 sftp:
   host: 127.0.0.1
   port: 2222
   user: testuser
   password: ${env:QA_SSH_PASSWORD}
-  remote_test_dir: /config/qa-ui-auto
+  remote_test_dir: /home/zhyhang/temp
 
 fixtures:
   start_local_sshd: false
+  sshd_port: 2222
+  sshd_user: testuser
+  sshd_password: ${env:QA_SSH_PASSWORD}
 
 report:
-  dir: qa-ui-auto-report-smoke
+  dir: qa-ui-auto-report
   keep_runs: 5

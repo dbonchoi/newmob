@@ -25,6 +25,10 @@ import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+
+from tauri_webdriver import native_binary, native_tool_issues  # noqa: E402
+
 ROOT = Path.cwd()
 
 
@@ -50,14 +54,6 @@ def _on_replit() -> bool:
     return bool(os.environ.get("REPL_ID") or os.environ.get("REPLIT_DEV_DOMAIN"))
 
 
-def _native_binary(cfg: dict) -> Path:
-    explicit = cfg.get("app", {}).get("native_binary")
-    if explicit:
-        return Path(explicit).expanduser()
-    name = "newmob.exe" if platform.system() == "Windows" else "newmob"
-    return ROOT / "src-tauri" / "target" / "debug" / name
-
-
 # ─── individual probes ──────────────────────────────────────────────────────
 
 def probe_dev_server(cfg: dict) -> list[str]:
@@ -80,14 +76,17 @@ def probe_dev_server(cfg: dict) -> list[str]:
 
 
 def probe_native(cfg: dict) -> list[str]:
-    binary = _native_binary(cfg)
+    binary = native_binary(cfg)
     hints: list[str] = []
     if not binary.exists():
         hints += [
             f"✗ Tauri debug binary not found at {binary}.",
             "  Build it first:",
             "    pnpm tauri build --debug --no-bundle",
+            "  or:",
+            "    cargo tauri build --debug --no-bundle",
         ]
+    hints += native_tool_issues(cfg)
     if platform.system() == "Linux" and not os.environ.get("DISPLAY"):
         hints += [
             "✗ No DISPLAY set — the native binary needs an X server.",
@@ -129,7 +128,7 @@ def probe_ssh(cfg: dict, key: str) -> list[str]:
     return hints
 
 
-def probe_tooling() -> list[str]:
+def probe_browser_tooling() -> list[str]:
     hints: list[str] = []
     if not shutil.which("playwright-cli"):
         hints += [
@@ -150,8 +149,8 @@ def probe_tooling() -> list[str]:
 def probe(cfg: dict, mode: str, *, need_ssh: bool = True,
           need_sftp: bool = True) -> list[str]:
     issues: list[str] = []
-    issues += probe_tooling()
     if mode == "browser":
+        issues += probe_browser_tooling()
         issues += probe_dev_server(cfg)
     elif mode == "native":
         issues += probe_native(cfg)
@@ -162,13 +161,13 @@ def probe(cfg: dict, mode: str, *, need_ssh: bool = True,
     return issues
 
 
-def report(issues: list[str]) -> int:
+def report(issues: list[str], mode: str = "browser") -> int:
     if not issues:
         return 0
     print("\nqa-ui-auto preflight: required services are not ready.\n")
     print("\n".join(issues))
     print("\nFix the items above and re-run. To re-probe only:")
-    print("    python .agents/skills/qa-ui-auto/scripts/probe.py --mode browser")
+    print(f"    python .agents/skills/qa-ui-auto/scripts/probe.py --mode {mode}")
     return 2
 
 
@@ -194,7 +193,7 @@ def main() -> int:
     issues = probe(cfg, args.mode,
                    need_ssh=not args.no_ssh,
                    need_sftp=not args.no_sftp)
-    return report(issues)
+    return report(issues, args.mode)
 
 
 if __name__ == "__main__":

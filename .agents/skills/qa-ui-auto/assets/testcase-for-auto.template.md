@@ -24,7 +24,7 @@
 
 ## TC-001: Launch and render main window
 - tags: smoke, p0
-- mode: browser
+- mode: browser,native
 
 1. open ${cfg:app.base_url}
 2. wait_for 'text="Quick connect:"'
@@ -33,7 +33,7 @@
 
 ## TC-002: Open settings panel and toggle theme
 - tags: smoke, ui
-- mode: browser
+- mode: browser,native
 
 1. open ${cfg:app.base_url}
 2. click 'text="Settings"'
