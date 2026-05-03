@@ -12,6 +12,10 @@ import {
   type TerminalProfile,
   type TerminalSyntaxMode,
 } from "../../lib/terminalProfile";
+import {
+  getSessionNetworkSettings,
+  toNetworkSettingsPayload,
+} from "../../lib/networkSettings";
 import { TERMINAL_THEME_DEFINITIONS, resolveThemeId } from "../../lib/themes";
 import {
   findFontName,
@@ -787,7 +791,19 @@ export function TerminalPanel({
     const { cols, rows } = term;
 
     const connectPromise = ssh
-      ? createSshTerminal(ssh.host, ssh.port, ssh.username, ssh.authMethod, ssh.authData, cols, rows)
+      ? createSshTerminal(
+          ssh.host,
+          ssh.port,
+          ssh.username,
+          ssh.authMethod,
+          ssh.authData,
+          cols,
+          rows,
+          (() => {
+            const ns = getSessionNetworkSettings(ssh.optionsJson);
+            return JSON.stringify(toNetworkSettingsPayload(ns));
+          })(),
+        )
       : createLocalTerminal(cols, rows, localShell?.id);
 
     if (ssh) {

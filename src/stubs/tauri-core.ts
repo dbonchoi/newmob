@@ -223,6 +223,9 @@ export async function invoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
     case "create_ssh_terminal": {
       const cols = (args?.cols as number) ?? 80;
       const rows = (args?.rows as number) ?? 24;
+      // The browser preview can't honour proxy / port-forwarding rows; we
+      // simply ignore `networkSettingsJson` here and let the WS proxy
+      // handle the SSH connection directly.
       return (await sshConnect({
         host: args?.host as string,
         port: (args?.port as number) || 22,

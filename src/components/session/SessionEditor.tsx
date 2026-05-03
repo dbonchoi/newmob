@@ -24,6 +24,15 @@ import {
 } from "lucide-react";
 import { useSessionStore } from "../../stores/sessionStore";
 import { testSshConnection } from "../../lib/ipc";
+import {
+  getSessionNetworkSettings,
+  ipKindToLabel,
+  ipLabelToKind,
+  proxyKindToLabel,
+  proxyLabelToKind,
+  toNetworkSettingsPayload,
+  type NetworkSettings as NetworkSettingsValue,
+} from "../../lib/networkSettings";
 import { parseUserHostPort } from "../../lib/quickConnect";
 import {
   SESSION_ROOT_LABEL,
@@ -447,29 +456,45 @@ function TerminalSettings({
   );
 }
 
-function NetworkSettings() {
-  const [proxy, setProxy] = useState("None — direct connection");
-  const [proxyHost, setProxyHost] = useState("");
-  const [proxyPort, setProxyPort] = useState("");
-  const [proxyUser, setProxyUser] = useState("");
-  const [proxyPass, setProxyPass] = useState("");
-  const [proxySave, setProxySave] = useState(false);
-  const [keepAlive, setKeepAlive] = useState(true);
-  const [keepAliveInterval, setKeepAliveInterval] = useState("60");
-  const [tcpNodelay, setTcpNodelay] = useState(true);
-  const [disableNagle, setDisableNagle] = useState(false);
-  const [ipVersion, setIpVersion] = useState("Auto (prefer IPv4)");
-  const [forwards, setForwards] = useState([
-    {
-      id: "default",
-      local: "127.0.0.1:5432",
-      remote: "db.internal:5432",
-      desc: "Postgres replica",
-    },
-  ]);
+function NetworkSettings({
+  value,
+  onChange,
+}: {
+  value: NetworkSettingsValue;
+  onChange: (next: NetworkSettingsValue) => void;
+}) {
   const [newFwdLocal, setNewFwdLocal] = useState("");
   const [newFwdRemote, setNewFwdRemote] = useState("");
   const [newFwdDesc, setNewFwdDesc] = useState("");
+
+  const patch = (delta: Partial<NetworkSettingsValue>) => onChange({ ...value, ...delta });
+  const proxy = proxyKindToLabel(value.proxyKind);
+  const proxyHost = value.proxyHost;
+  const proxyPort = value.proxyPort;
+  const proxyUser = value.proxyUser;
+  const proxyPass = value.proxyPass;
+  const proxySave = value.proxySaveAuth;
+  const keepAlive = value.keepAlive;
+  const keepAliveInterval = value.keepAliveIntervalSecs;
+  const tcpNodelay = value.tcpNodelay;
+  const disableNagle = value.disableNagle;
+  const ipVersion = ipKindToLabel(value.ipVersion);
+  const forwards = value.localForwards;
+
+  const setProxy = (label: string) => patch({ proxyKind: proxyLabelToKind(label) });
+  const setProxyHost = (v: string) => patch({ proxyHost: v });
+  const setProxyPort = (v: string) => patch({ proxyPort: v });
+  const setProxyUser = (v: string) => patch({ proxyUser: v });
+  const setProxyPass = (v: string) => patch({ proxyPass: v });
+  const setProxySave = (v: boolean) => patch({ proxySaveAuth: v });
+  const setKeepAlive = (v: boolean) => patch({ keepAlive: v });
+  const setKeepAliveInterval = (v: string) => patch({ keepAliveIntervalSecs: v });
+  const setTcpNodelay = (v: boolean) => patch({ tcpNodelay: v });
+  const setDisableNagle = (v: boolean) => patch({ disableNagle: v });
+  const setIpVersion = (label: string) => patch({ ipVersion: ipLabelToKind(label) });
+  const setForwards = (
+    updater: (items: NetworkSettingsValue["localForwards"]) => NetworkSettingsValue["localForwards"],
+  ) => patch({ localForwards: updater(value.localForwards) });
 
   const addForward = () => {
     if (!newFwdLocal.trim() || !newFwdRemote.trim()) return;
@@ -836,6 +861,11 @@ export function SessionEditor({ session, defaultGroupPath = null, initialProto, 
     getSessionTerminalProfile(session?.options_json) ?? loadGlobalTerminalProfile(),
   );
 
+  /* --- network settings --- */
+  const [networkSettings, setNetworkSettings] = useState<NetworkSettingsValue>(
+    () => getSessionNetworkSettings(session?.options_json),
+  );
+
   /* --- test connection --- */
   const [testResult, setTestResult] = useState<{
     ok: boolean;
@@ -918,6 +948,12 @@ export function SessionEditor({ session, defaultGroupPath = null, initialProto, 
         jumpUser, jumpPort, description, tags, doNotExit,
         remoteEnv, sshBrowser, followPath, osc7AutoInject, usePrivKey, useJump,
         terminalProfile,
+        // Strip the proxy password unless the user explicitly opted into
+        // "Save in vault". `options_json` lands in the SQLite session row
+        // in plaintext, so this is the gate keeping secrets out at rest.
+        networkSettings: networkSettings.proxySaveAuth
+          ? networkSettings
+          : { ...networkSettings, proxyPass: "" },
       }),
       created_at: session?.created_at ?? now,
       updated_at: now,
@@ -1000,6 +1036,7 @@ export function SessionEditor({ session, defaultGroupPath = null, initialProto, 
     setDescription(optionString(nextOptions, "description", ""));
     setTags(optionString(nextOptions, "tags", ""));
     setTerminalProfile(getSessionTerminalProfile(session?.options_json) ?? loadGlobalTerminalProfile());
+    setNetworkSettings(getSessionNetworkSettings(session?.options_json));
     setSaveError(null);
     setTestResult(null);
   };
@@ -1066,6 +1103,7 @@ export function SessionEditor({ session, defaultGroupPath = null, initialProto, 
         username,
         authMethod,
         authData,
+        JSON.stringify(toNetworkSettingsPayload(networkSettings)),
       );
       setTestResult({ ok: true, msg });
     } catch (err) {
@@ -1280,7 +1318,9 @@ export function SessionEditor({ session, defaultGroupPath = null, initialProto, 
           {activeSection === "terminal" && (
             <TerminalSettings profile={terminalProfile} onProfileChange={setTerminalProfile} />
           )}
-          {activeSection === "network" && <NetworkSettings />}
+          {activeSection === "network" && (
+            <NetworkSettings value={networkSettings} onChange={setNetworkSettings} />
+          )}
           {activeSection === "bookmark" && (
             <BookmarkSettings
               name={name} setName={setName}

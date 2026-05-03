@@ -35,6 +35,7 @@ export async function createSshTerminal(
   authData: string | null,
   cols: number,
   rows: number,
+  networkSettingsJson: string | null = null,
 ): Promise<string> {
   return invoke<string>("create_ssh_terminal", {
     host,
@@ -44,6 +45,7 @@ export async function createSshTerminal(
     authData,
     cols,
     rows,
+    networkSettingsJson,
   });
 }
 
@@ -53,6 +55,7 @@ export async function testSshConnection(
   username: string,
   authMethod: string,
   authData: string | null,
+  networkSettingsJson: string | null = null,
 ): Promise<string> {
   return invoke<string>("test_ssh_connection", {
     host,
@@ -60,6 +63,7 @@ export async function testSshConnection(
     username,
     authMethod,
     authData,
+    networkSettingsJson,
   });
 }
 
