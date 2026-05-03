@@ -33,7 +33,7 @@ interface FilePanelProps {
   onUploadSelected?: (entries: FileEntry[]) => void;
   onUploadFromDisk?: (files: File[]) => void;
   onDeleteSelected?: (entries: FileEntry[]) => void;
-  onChmodSelected?: (entry: FileEntry) => void;
+  onChmodSelected?: (entries: FileEntry[]) => void;
   onPreviewSelected?: (entry: FileEntry) => void;
   onNewFile?: () => void;
   onOpenTerminalHere?: (path: string) => void;
@@ -340,8 +340,8 @@ export function FilePanel({
             : undefined
         }
         onChmod={
-          onChmodSelected && firstSelected
-            ? () => onChmodSelected(firstSelected)
+          onChmodSelected && selectedEntries.length > 0
+            ? () => onChmodSelected(selectedEntries)
             : undefined
         }
         onPreview={

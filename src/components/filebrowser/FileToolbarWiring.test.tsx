@@ -14,6 +14,7 @@ const controllerMocks = vi.hoisted(() => ({
   remove: vi.fn(async () => undefined),
   rename: vi.fn(async () => undefined),
   chmod: vi.fn(async () => undefined),
+  chmodRecursive: vi.fn(async () => undefined),
   mkdir: vi.fn(async () => undefined),
   createFile: vi.fn(async () => undefined),
   cancel: vi.fn(async () => undefined),
@@ -209,7 +210,7 @@ describe("FileToolbar wiring through FilePanel", () => {
     expect(screen.getByTitle(/View \/ preview text file/i)).toBeEnabled();
   });
 
-  it("disables chmod and preview when more than one entry is selected", () => {
+  it("enables chmod for multi-select and disables preview when no previewable file selected", () => {
     seedSession();
     renderRemote();
 
@@ -217,8 +218,8 @@ describe("FileToolbar wiring through FilePanel", () => {
 
     expect(screen.getByTitle(/Download 2 selected to local/i)).toBeEnabled();
     expect(screen.getByTitle(/Delete 2 selected/i)).toBeEnabled();
-    // chmod is single-selection only.
-    expect(screen.getByTitle(/Permissions \(chmod\)/i)).toBeDisabled();
+    // chmod now supports multi-select and applies the same mode to all.
+    expect(screen.getByTitle(/Permissions \(chmod\) for 2 selected/i)).toBeEnabled();
     // image.png is not a previewable text type.
     expect(screen.getByTitle(/View \/ preview text file/i)).toBeDisabled();
   });

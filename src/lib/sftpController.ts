@@ -8,6 +8,8 @@ import {
   sftpChmod,
   sftpDownload,
   sftpDownloadDir,
+  sftpListLocal,
+  sftpListRemote,
   sftpMkdir,
   sftpOpenPath,
   sftpPauseTransfer,
@@ -352,6 +354,44 @@ export function useSftpController(sessionId: string) {
     [refreshPane, sessionId, setStatus],
   );
 
+  const chmodRecursive = useCallback(
+    async (path: string, mode: number, side: FsSide) => {
+      const listFn = side === "remote"
+        ? (p: string) => sftpListRemote(sessionId, p)
+        : (p: string) => sftpListLocal(p);
+      const visit = async (p: string, isDir: boolean): Promise<void> => {
+        try {
+          await sftpChmod(sessionId, p, mode, side);
+        } catch (err) {
+          setStatus(`chmod ${p} failed: ${err instanceof Error ? err.message : err}`);
+        }
+        if (!isDir) return;
+        let children: FileEntry[] = [];
+        try {
+          children = await listFn(p);
+        } catch (err) {
+          setStatus(`Listing ${p} failed: ${err instanceof Error ? err.message : err}`);
+          return;
+        }
+        for (const c of children) {
+          if (c.fileType === "symlink") {
+            // Don't follow symlinks; chmod the link itself is a no-op on most
+            // SFTP servers, so just skip to avoid surprises.
+            continue;
+          }
+          await visit(c.path, c.fileType === "dir");
+        }
+      };
+      try {
+        await visit(path, true);
+        await refreshPane(sessionId, side);
+      } catch (err) {
+        setStatus(`Recursive chmod failed: ${err instanceof Error ? err.message : err}`);
+      }
+    },
+    [refreshPane, sessionId, setStatus],
+  );
+
   const createFile = useCallback(
     async (parent: string, name: string, side: FsSide) => {
       const target = joinPath(parent, name);
@@ -378,6 +418,7 @@ export function useSftpController(sessionId: string) {
     remove,
     rename,
     chmod,
+    chmodRecursive,
     createFile,
     cancelTransfer,
     pauseTransfer,

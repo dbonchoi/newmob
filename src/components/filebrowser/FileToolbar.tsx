@@ -143,8 +143,12 @@ export function FileToolbar(props: FileToolbarProps) {
       )}
       {onChmod && (
         <ToolBtn
-          title="Permissions (chmod)…"
-          disabled={selectionCount !== 1}
+          title={
+            selectionCount > 1
+              ? `Permissions (chmod) for ${selectionCount} selected…`
+              : "Permissions (chmod)…"
+          }
+          disabled={selectionCount === 0}
           onClick={onChmod}
         >
           <KeyRound className="w-3.5 h-3.5" />

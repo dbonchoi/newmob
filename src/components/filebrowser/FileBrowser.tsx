@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { FilePanel, isPreviewable } from "./FilePanel";
 import { FileTransferQueue } from "./FileTransferQueue";
+import { ChmodDialog } from "./ChmodDialog";
 import { useSftpStore, type PaneSide } from "../../stores/sftpStore";
 import { useSftpController } from "../../lib/sftpController";
 import { joinPath, basename, type FileEntry, type FsSide } from "../../lib/sftp";
@@ -79,6 +80,7 @@ export function FileBrowser(props: FileBrowserProps) {
 
   const [downloadPrompt, setDownloadPrompt] = useState<FileEntry | null>(null);
   const [previewing, setPreviewing] = useState<{ entry: FileEntry; side: FsSide; text: string } | null>(null);
+  const [chmodPrompt, setChmodPrompt] = useState<{ entries: FileEntry[]; side: FsSide } | null>(null);
   // Per-pane filter strings (case-insensitive substring match).
   const [localFilter, setLocalFilter] = useState("");
   const [remoteFilter, setRemoteFilter] = useState("");
@@ -224,19 +226,7 @@ export function FileBrowser(props: FileBrowserProps) {
       });
       items.push({
         label: "Permissions…",
-        onClick: () => {
-          const current = entry.mode != null
-            ? (entry.mode & 0o777).toString(8).padStart(3, "0")
-            : "644";
-          const input = window.prompt(`Octal mode for ${entry.name}`, current);
-          if (!input) return;
-          const mode = parseInt(input, 8);
-          if (!Number.isFinite(mode)) {
-            setStatus(`Invalid mode: ${input}`);
-            return;
-          }
-          void controller.chmod(entry.path, mode, "local");
-        },
+        onClick: () => setChmodPrompt({ entries: [entry], side: "local" }),
       });
       items.push({
         label: "Delete",
@@ -282,19 +272,7 @@ export function FileBrowser(props: FileBrowserProps) {
       });
       items.push({
         label: "Permissions…",
-        onClick: () => {
-          const current = entry.mode != null
-            ? (entry.mode & 0o777).toString(8).padStart(3, "0")
-            : "644";
-          const input = window.prompt(`Octal mode for ${entry.name}`, current);
-          if (!input) return;
-          const mode = parseInt(input, 8);
-          if (!Number.isFinite(mode)) {
-            setStatus(`Invalid mode: ${input}`);
-            return;
-          }
-          void controller.chmod(entry.path, mode, "remote");
-        },
+        onClick: () => setChmodPrompt({ entries: [entry], side: "remote" }),
       });
       items.push({
         label: "Delete",
@@ -519,18 +497,9 @@ export function FileBrowser(props: FileBrowserProps) {
                   void controller.remove(entry.path, "local", true);
                 }
               }}
-              onChmodSelected={(entry) => {
-                const current = entry.mode != null
-                  ? (entry.mode & 0o777).toString(8).padStart(3, "0")
-                  : "644";
-                const input = window.prompt(`Octal mode for ${entry.name}`, current);
-                if (!input) return;
-                const mode = parseInt(input, 8);
-                if (!Number.isFinite(mode)) {
-                  setStatus(`Invalid mode: ${input}`);
-                  return;
-                }
-                void controller.chmod(entry.path, mode, "local");
+              onChmodSelected={(entries) => {
+                if (entries.length === 0) return;
+                setChmodPrompt({ entries, side: "local" });
               }}
               onPreviewSelected={(entry) => {
                 if (!isPreviewable(entry)) {
@@ -592,18 +561,9 @@ export function FileBrowser(props: FileBrowserProps) {
                   void controller.remove(entry.path, "remote", true);
                 }
               }}
-              onChmodSelected={(entry) => {
-                const current = entry.mode != null
-                  ? (entry.mode & 0o777).toString(8).padStart(3, "0")
-                  : "644";
-                const input = window.prompt(`Octal mode for ${entry.name}`, current);
-                if (!input) return;
-                const mode = parseInt(input, 8);
-                if (!Number.isFinite(mode)) {
-                  setStatus(`Invalid mode: ${input}`);
-                  return;
-                }
-                void controller.chmod(entry.path, mode, "remote");
+              onChmodSelected={(entries) => {
+                if (entries.length === 0) return;
+                setChmodPrompt({ entries, side: "remote" });
               }}
               onPreviewSelected={(entry) => {
                 if (!isPreviewable(entry)) {
@@ -668,6 +628,24 @@ export function FileBrowser(props: FileBrowserProps) {
           localDir={session?.local.path ?? ""}
           onCancel={() => setDownloadPrompt(null)}
           onDownload={(openAfter) => handleDownloadConfirmed(downloadPrompt, openAfter)}
+        />
+      )}
+
+      {chmodPrompt && (
+        <ChmodDialog
+          entries={chmodPrompt.entries}
+          onCancel={() => setChmodPrompt(null)}
+          onApply={(mode, recursive) => {
+            const { entries, side } = chmodPrompt;
+            for (const entry of entries) {
+              if (recursive && entry.fileType === "dir") {
+                void controller.chmodRecursive(entry.path, mode, side);
+              } else {
+                void controller.chmod(entry.path, mode, side);
+              }
+            }
+            setChmodPrompt(null);
+          }}
         />
       )}
 
