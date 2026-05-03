@@ -38,6 +38,7 @@ import {
   closeTerminal,
   listenTerminalOutput,
   listenTerminalExit,
+  listenTerminalForwardError,
   encodeBase64,
   decodeBase64,
 } from "../../lib/ipc";
@@ -717,6 +718,7 @@ export function TerminalPanel({
     let destroyed = false;
     let unlistenOutput: UnlistenFn | null = null;
     let unlistenExit: UnlistenFn | null = null;
+    let unlistenForwardError: UnlistenFn | null = null;
     let detachImeGuard: (() => void) | null = null;
     let resizeTimer: ReturnType<typeof setTimeout>;
 
@@ -859,6 +861,16 @@ export function TerminalPanel({
           }
           term.write("\r\n\x1b[33m[Session ended]\x1b[0m\r\n");
         });
+
+        // Surface per-row local-forward errors (parse, bind, accept,
+        // direct-tcpip open) in the same event log the user already sees
+        // for connection / auth / disconnect events.
+        unlistenForwardError = await listenTerminalForwardError(sid, (err) => {
+          appendEvent(
+            "error",
+            `Local forward ${err.local} → ${err.remote}: ${err.message}`,
+          );
+        });
       })
       .catch((err) => {
         console.error("Failed to create terminal:", err);
@@ -875,6 +887,7 @@ export function TerminalPanel({
       clearTimeout(resizeTimer);
       unlistenOutput?.();
       unlistenExit?.();
+      unlistenForwardError?.();
       detachImeGuard?.();
       if (loggingActiveRef.current && outputLogRef.current) {
         flushRecordedOutput("Terminal closed; saved recorded output");

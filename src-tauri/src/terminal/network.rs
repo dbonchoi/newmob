@@ -111,10 +111,54 @@ async fn open_tcp_filtered(
     ))
 }
 
+/// Resolve the destination host into a single deterministic identifier
+/// to send across a proxy hop, honoring the IP-version preference.
+///
+/// Semantics:
+/// - `ip_version == "auto"`: pass the original hostname to the proxy and
+///   let the proxy do its own resolution (preserves split-DNS / proxy-side
+///   resolution, the standard behavior for HTTP CONNECT and SOCKS5).
+/// - `ip_version == "ipv4"` or `"ipv6"`: resolve locally to a matching IP
+///   literal and pass that to the proxy. This makes the policy
+///   deterministic end-to-end even through a proxy hop.
+async fn resolve_destination_for_proxy(
+    host: &str,
+    port: u16,
+    ip_version: &str,
+) -> Result<String, String> {
+    if ip_version != "ipv4" && ip_version != "ipv6" {
+        return Ok(host.to_string());
+    }
+    // Already an IP literal? respect it as-is so no surprise re-resolution.
+    if host.parse::<std::net::IpAddr>().is_ok() {
+        return Ok(host.to_string());
+    }
+    let addrs: Vec<std::net::SocketAddr> = lookup_host((host, port))
+        .await
+        .map_err(|e| format!("DNS lookup for {}:{} failed: {}", host, port, e))?
+        .filter(|a| match ip_version {
+            "ipv4" => a.is_ipv4(),
+            "ipv6" => a.is_ipv6(),
+            _ => true,
+        })
+        .collect();
+    let chosen = addrs
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("No matching IP{} addresses for {}", ip_version, host))?;
+    Ok(chosen.ip().to_string())
+}
+
 /// Establish the TCP transport for an SSH connection, applying proxy hop
 /// (HTTP CONNECT or SOCKS5), TCP_NODELAY, and IP-version preference per
 /// the supplied `NetworkSettings`. When `network` is `None` this is a
 /// direct TCP connect with `nodelay=true`.
+///
+/// IP-version policy under proxy: when the user picked `ipv4` / `ipv6`,
+/// the destination hostname is pre-resolved locally to a matching IP
+/// literal and that literal is sent to the proxy. With `auto`, the
+/// hostname is forwarded as-is and the proxy performs its own
+/// resolution (the standard CONNECT/SOCKS5 behavior).
 pub async fn establish_transport(
     host: &str,
     port: u16,
@@ -129,17 +173,19 @@ pub async fn establish_transport(
         "http" => {
             let n = network.unwrap();
             require_proxy(n)?;
+            let dest = resolve_destination_for_proxy(host, port, ip_pref).await?;
             let mut s = open_tcp_filtered(&n.proxy_host, n.proxy_port, ip_pref).await?;
             s.set_nodelay(nodelay).map_err(|e| format!("set_nodelay: {}", e))?;
-            http_connect_handshake(&mut s, host, port, &n.proxy_user, &n.proxy_pass).await?;
+            http_connect_handshake(&mut s, &dest, port, &n.proxy_user, &n.proxy_pass).await?;
             s
         }
         "socks5" => {
             let n = network.unwrap();
             require_proxy(n)?;
+            let dest = resolve_destination_for_proxy(host, port, ip_pref).await?;
             let mut s = open_tcp_filtered(&n.proxy_host, n.proxy_port, ip_pref).await?;
             s.set_nodelay(nodelay).map_err(|e| format!("set_nodelay: {}", e))?;
-            socks5_handshake(&mut s, host, port, &n.proxy_user, &n.proxy_pass).await?;
+            socks5_handshake(&mut s, &dest, port, &n.proxy_user, &n.proxy_pass).await?;
             s
         }
         other => {
@@ -255,12 +301,29 @@ async fn socks5_handshake(
         m => return Err(format!("SOCKS5 unsupported auth method 0x{:02x}", m)),
     }
 
-    let host_bytes = host.as_bytes();
-    if host_bytes.len() > 255 {
-        return Err("SOCKS5 destination host too long (>255 bytes)".into());
+    // Prefer ATYP=IP literal when the destination already parses as one
+    // (typical when the IP-version policy pre-resolved the host); fall
+    // back to ATYP=DOMAINNAME so the proxy resolves it.
+    let mut req: Vec<u8> = vec![0x05, 0x01, 0x00];
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(v4)) => {
+            req.push(0x01);
+            req.extend_from_slice(&v4.octets());
+        }
+        Ok(std::net::IpAddr::V6(v6)) => {
+            req.push(0x04);
+            req.extend_from_slice(&v6.octets());
+        }
+        Err(_) => {
+            let host_bytes = host.as_bytes();
+            if host_bytes.len() > 255 {
+                return Err("SOCKS5 destination host too long (>255 bytes)".into());
+            }
+            req.push(0x03);
+            req.push(host_bytes.len() as u8);
+            req.extend_from_slice(host_bytes);
+        }
     }
-    let mut req: Vec<u8> = vec![0x05, 0x01, 0x00, 0x03, host_bytes.len() as u8];
-    req.extend_from_slice(host_bytes);
     req.extend_from_slice(&port.to_be_bytes());
     s.write_all(&req).await.map_err(|e| format!("socks request: {}", e))?;
 
@@ -313,4 +376,133 @@ pub fn parse_endpoint(s: &str) -> Result<(String, u16), String> {
         .parse()
         .map_err(|_| format!("invalid port in '{}'", s))?;
     Ok((host.to_string(), port))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_endpoint_host_port() {
+        let (h, p) = parse_endpoint("db.lan:5432").unwrap();
+        assert_eq!(h, "db.lan");
+        assert_eq!(p, 5432);
+    }
+
+    #[test]
+    fn parse_endpoint_ipv6_bracketed() {
+        let (h, p) = parse_endpoint("[::1]:22").unwrap();
+        assert_eq!(h, "::1");
+        assert_eq!(p, 22);
+    }
+
+    #[test]
+    fn parse_endpoint_rejects_garbage() {
+        assert!(parse_endpoint("no-port-here").is_err());
+        assert!(parse_endpoint(":5432").is_err());
+        assert!(parse_endpoint("host:notaport").is_err());
+        assert!(parse_endpoint("[::1:22").is_err());
+    }
+
+    #[test]
+    fn from_json_returns_none_on_empty_or_garbage() {
+        assert!(NetworkSettings::from_json(None).is_none());
+        assert!(NetworkSettings::from_json(Some("")).is_none());
+        assert!(NetworkSettings::from_json(Some("   ")).is_none());
+        assert!(NetworkSettings::from_json(Some("not-json")).is_none());
+    }
+
+    #[test]
+    fn from_json_round_trip_camel_case() {
+        let raw = r#"{
+            "proxyKind": "http",
+            "proxyHost": "proxy.corp",
+            "proxyPort": 3128,
+            "proxyUser": "alice",
+            "proxyPass": "s3cret",
+            "keepAlive": true,
+            "keepAliveIntervalSecs": 30,
+            "tcpNodelay": false,
+            "ipVersion": "ipv6",
+            "localForwards": [{"local":"127.0.0.1:5432","remote":"db.lan:5432"}]
+        }"#;
+        let n = NetworkSettings::from_json(Some(raw)).expect("parsed");
+        assert_eq!(n.proxy_kind, "http");
+        assert_eq!(n.proxy_host, "proxy.corp");
+        assert_eq!(n.proxy_port, 3128);
+        assert_eq!(n.proxy_user, "alice");
+        assert_eq!(n.proxy_pass, "s3cret");
+        assert!(n.keep_alive);
+        assert_eq!(n.keep_alive_interval_secs, 30);
+        assert!(!n.tcp_nodelay);
+        assert_eq!(n.ip_version, "ipv6");
+        assert_eq!(n.local_forwards.len(), 1);
+        assert_eq!(n.local_forwards[0].local, "127.0.0.1:5432");
+        assert_eq!(n.local_forwards[0].remote, "db.lan:5432");
+    }
+
+    #[test]
+    fn keepalive_duration_respects_flag_and_interval() {
+        let mut n = NetworkSettings::default();
+        n.keep_alive = false;
+        n.keep_alive_interval_secs = 30;
+        assert!(n.keepalive_duration().is_none());
+
+        n.keep_alive = true;
+        n.keep_alive_interval_secs = 0;
+        assert!(n.keepalive_duration().is_none());
+
+        n.keep_alive_interval_secs = 30;
+        assert_eq!(n.keepalive_duration(), Some(Duration::from_secs(30)));
+    }
+
+    #[tokio::test]
+    async fn establish_transport_rejects_unsupported_proxy_kinds() {
+        for kind in ["socks4", "ssh-tunnel", "system"] {
+            let mut n = NetworkSettings::default();
+            n.proxy_kind = kind.into();
+            n.proxy_host = "127.0.0.1".into();
+            n.proxy_port = 1;
+            let err = establish_transport("example.com", 22, Some(&n))
+                .await
+                .expect_err("should reject unsupported proxy kind");
+            assert!(err.contains("not implemented"), "got: {}", err);
+        }
+    }
+
+    #[tokio::test]
+    async fn establish_transport_validates_proxy_fields() {
+        let mut n = NetworkSettings::default();
+        n.proxy_kind = "http".into();
+        // empty proxy_host
+        n.proxy_host = "".into();
+        n.proxy_port = 3128;
+        let err = establish_transport("example.com", 22, Some(&n))
+            .await
+            .expect_err("empty proxy host should error");
+        assert!(err.to_lowercase().contains("proxy host"), "got: {}", err);
+
+        n.proxy_host = "127.0.0.1".into();
+        n.proxy_port = 0;
+        let err = establish_transport("example.com", 22, Some(&n))
+            .await
+            .expect_err("zero proxy port should error");
+        assert!(err.to_lowercase().contains("proxy port"), "got: {}", err);
+    }
+
+    #[tokio::test]
+    async fn resolve_destination_passes_through_in_auto_mode() {
+        let dest = resolve_destination_for_proxy("example.com", 22, "auto")
+            .await
+            .unwrap();
+        assert_eq!(dest, "example.com");
+    }
+
+    #[tokio::test]
+    async fn resolve_destination_keeps_ip_literals_unchanged() {
+        let dest = resolve_destination_for_proxy("203.0.113.5", 22, "ipv4")
+            .await
+            .unwrap();
+        assert_eq!(dest, "203.0.113.5");
+    }
 }

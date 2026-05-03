@@ -111,6 +111,24 @@ export async function listenTerminalExit(
   });
 }
 
+export interface ForwardErrorPayload {
+  local: string;
+  remote: string;
+  message: string;
+}
+
+export async function listenTerminalForwardError(
+  sessionId: string,
+  callback: (err: ForwardErrorPayload) => void,
+): Promise<UnlistenFn> {
+  return listen<ForwardErrorPayload>(
+    `terminal-forward-error-${sessionId}`,
+    (event) => {
+      callback(event.payload);
+    },
+  );
+}
+
 export function encodeBase64(str: string): string {
   const encoder = new TextEncoder();
   const bytes = encoder.encode(str);

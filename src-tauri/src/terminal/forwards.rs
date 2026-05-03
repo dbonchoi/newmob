@@ -9,10 +9,17 @@
 //! Each listener owns a `tokio::task::JoinSet` of bridge tasks; aborting
 //! the listener drops the `JoinSet`, which in turn aborts every accepted
 //! connection's bridge so no traffic outlives the terminal.
+//!
+//! Per-row failures (parse errors, bind errors, runtime errors) are
+//! emitted as `terminal-forward-error-{session_id}` Tauri events so the
+//! frontend can surface them in the terminal event log instead of having
+//! them silently absorbed by the tracing subscriber.
 
 use std::sync::Arc;
 
 use russh::ChannelMsg;
+use serde::Serialize;
+use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::task::{JoinHandle, JoinSet};
@@ -20,37 +27,69 @@ use tokio::task::{JoinHandle, JoinSet};
 use crate::terminal::network::{parse_endpoint, NetworkForward};
 use crate::terminal::ssh::SshHandler;
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForwardErrorEvent {
+    pub local: String,
+    pub remote: String,
+    pub message: String,
+}
+
+fn emit_forward_error(
+    app: &AppHandle,
+    session_id: &str,
+    local: &str,
+    remote: &str,
+    message: String,
+) {
+    tracing::warn!("session forward {} → {}: {}", local, remote, message);
+    let _ = app.emit(
+        &format!("terminal-forward-error-{}", session_id),
+        ForwardErrorEvent {
+            local: local.to_string(),
+            remote: remote.to_string(),
+            message,
+        },
+    );
+}
+
 /// Spawn one listener per `local → remote` row. Returns the join handles
 /// of the listener tasks. Dropping a listener task drops its child
 /// `JoinSet`, which aborts all in-flight bridge tasks owned by that
-/// listener.
+/// listener. Per-row failures are emitted as
+/// `terminal-forward-error-{session_id}` events.
 pub fn spawn_local_forwards(
     handle: Arc<russh::client::Handle<SshHandler>>,
     forwards: &[NetworkForward],
+    app: AppHandle,
+    session_id: String,
 ) -> Vec<JoinHandle<()>> {
     let mut handles = Vec::with_capacity(forwards.len());
     for f in forwards {
         let (lhost, lport) = match parse_endpoint(&f.local) {
             Ok(v) => v,
             Err(e) => {
-                tracing::warn!("local forward '{}' → '{}': {}", f.local, f.remote, e);
+                emit_forward_error(&app, &session_id, &f.local, &f.remote, e);
                 continue;
             }
         };
         let (rhost, rport) = match parse_endpoint(&f.remote) {
             Ok(v) => v,
             Err(e) => {
-                tracing::warn!("local forward '{}' → '{}': {}", f.local, f.remote, e);
+                emit_forward_error(&app, &session_id, &f.local, &f.remote, e);
                 continue;
             }
         };
         let h = handle.clone();
+        let app_c = app.clone();
+        let sid = session_id.clone();
+        let local_label = f.local.clone();
+        let remote_label = f.remote.clone();
         let task = tokio::spawn(async move {
-            if let Err(e) = run_listener(h, lhost.clone(), lport, rhost.clone(), rport).await {
-                tracing::warn!(
-                    "session forward {}:{} → {}:{} stopped: {}",
-                    lhost, lport, rhost, rport, e
-                );
+            if let Err(e) =
+                run_listener(h, lhost.clone(), lport, rhost.clone(), rport, app_c.clone(), sid.clone(), local_label.clone(), remote_label.clone()).await
+            {
+                emit_forward_error(&app_c, &sid, &local_label, &remote_label, e);
             }
         });
         handles.push(task);
@@ -58,12 +97,17 @@ pub fn spawn_local_forwards(
     handles
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_listener(
     handle: Arc<russh::client::Handle<SshHandler>>,
     lhost: String,
     lport: u16,
     rhost: String,
     rport: u16,
+    app: AppHandle,
+    session_id: String,
+    local_label: String,
+    remote_label: String,
 ) -> Result<(), String> {
     let listener = TcpListener::bind((lhost.as_str(), lport))
         .await
@@ -86,12 +130,22 @@ async fn run_listener(
         let (mut stream, peer) = match listener.accept().await {
             Ok(v) => v,
             Err(e) => {
-                tracing::warn!("session forward accept failed: {}", e);
+                emit_forward_error(
+                    &app,
+                    &session_id,
+                    &local_label,
+                    &remote_label,
+                    format!("accept failed: {}", e),
+                );
                 continue;
             }
         };
         let h = handle.clone();
         let rh = rhost.clone();
+        let app_c = app.clone();
+        let sid = session_id.clone();
+        let l_label = local_label.clone();
+        let r_label = remote_label.clone();
         bridges.spawn(async move {
             let originator = peer.ip().to_string();
             let originator_port = peer.port() as u32;
@@ -101,7 +155,13 @@ async fn run_listener(
             {
                 Ok(c) => c,
                 Err(e) => {
-                    tracing::warn!("direct-tcpip open failed: {}", e);
+                    emit_forward_error(
+                        &app_c,
+                        &sid,
+                        &l_label,
+                        &r_label,
+                        format!("direct-tcpip open failed: {}", e),
+                    );
                     let _ = stream.shutdown().await;
                     return;
                 }

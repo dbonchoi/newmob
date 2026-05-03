@@ -111,7 +111,12 @@ pub async fn create_ssh_terminal(
     // TCP listening ports.
     let forward_handles = if let Some(n) = &network {
         if !n.local_forwards.is_empty() {
-            forwards::spawn_local_forwards(handle_arc.clone(), &n.local_forwards)
+            forwards::spawn_local_forwards(
+                handle_arc.clone(),
+                &n.local_forwards,
+                app_handle.clone(),
+                session_id.clone(),
+            )
         } else {
             Vec::new()
         }
