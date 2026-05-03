@@ -479,24 +479,17 @@ pub async fn open_sftp_window(
         }
         return Ok(());
     }
-    // We can't use `WebviewUrl::App(PathBuf::from("index.html?sftp=..."))`:
-    // Tauri treats the whole `PathBuf` as a single path segment and
-    // percent-encodes `?` to `%3F`, so the new window navigates to a URL
-    // like `tauri://localhost/index.html%3Fsftp=...` and renders blank.
-    //
-    // Build the URL from the main window's live URL instead — that way
-    // we pick up the right protocol/host in both `tauri dev` (vite at
-    // http://localhost:1420) and bundled mode (custom tauri:// scheme),
-    // and we can attach the `?sftp=` query without it getting mangled.
-    let mut new_url = app_handle
-        .get_webview_window("main")
-        .ok_or_else(|| "main window not found".to_string())?
-        .url()
-        .map_err(|e| format!("failed to read main window url: {}", e))?;
-    new_url.set_query(Some(&format!("sftp={}", session_id)));
-    new_url.set_fragment(None);
+    // Use WebviewUrl::App so Tauri resolves the correct base URL in both
+    // dev mode (http://localhost:1420) and production (tauri:// scheme).
+    // We pass the session id via the URL fragment (#sftp=...) because
+    // WebviewUrl::App wraps a PathBuf and Tauri does NOT percent-encode
+    // the fragment, whereas it does encode '?' in the path component.
+    // The frontend reads window.location.hash to detect this route.
+    let path_str = format!("index.html#sftp={}", session_id);
+    log::info!("Opening SFTP window with path: {}", path_str);
+    let url = WebviewUrl::App(std::path::PathBuf::from(path_str));
     let title = title.unwrap_or_else(|| format!("SFTP — {}", session_id));
-    WebviewWindowBuilder::new(&app_handle, &label, WebviewUrl::External(new_url))
+    WebviewWindowBuilder::new(&app_handle, &label, url)
         .title(&title)
         .inner_size(1200.0, 760.0)
         .min_inner_size(720.0, 420.0)

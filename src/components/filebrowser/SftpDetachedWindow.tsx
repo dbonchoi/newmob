@@ -139,14 +139,31 @@ export function detachedWindowUrl(sessionId: string): string {
 }
 
 /**
- * Returns the SFTP session id requested via `?sftp=...` if the page was
- * opened as a detached SFTP window, or null otherwise.
+ * Returns the SFTP session id if the page was opened as a detached SFTP
+ * window, or null otherwise.
+ *
+ * Checks the URL fragment first (`#sftp=...`) — this is what the Tauri
+ * backend writes via WebviewUrl::App so the path component never gets
+ * percent-encoded. Falls back to the query string (`?sftp=...`) for
+ * browser-mode window.open() and older builds.
  */
 export function detectDetachedSftpRoute(): string | null {
   if (typeof window === "undefined") return null;
   try {
+    // Fragment: #sftp=<sessionId>  (Tauri native window path)
+    const hash = window.location.hash;
+    console.log("[detectDetachedSftpRoute] hash:", hash);
+    if (hash.startsWith("#sftp=")) {
+      const id = hash.slice("#sftp=".length);
+      console.log("[detectDetachedSftpRoute] Found session id in hash:", id);
+      if (id) return id;
+    }
+    // Query string: ?sftp=<sessionId>  (browser window.open path)
     const url = new URL(window.location.href);
-    return url.searchParams.get("sftp");
+    const queryId = url.searchParams.get("sftp");
+    console.log("[detectDetachedSftpRoute] query sftp param:", queryId);
+    console.log("[detectDetachedSftpRoute] full URL:", window.location.href);
+    return queryId;
   } catch {
     return null;
   }

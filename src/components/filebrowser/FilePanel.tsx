@@ -131,6 +131,20 @@ export function FilePanel({
     setSelection(sessionId, side, []);
   }, [sessionId, side, setSelection, pane?.path]);
 
+  const selectedEntries = useMemo<FileEntry[]>(() => {
+    if (!pane) return [];
+    const set = new Set(pane.selection);
+    return sortedEntries.filter((e) => set.has(e.path));
+  }, [pane, sortedEntries]);
+
+  const firstSelected = selectedEntries[0];
+  const canPreview = !!(
+    onPreviewSelected &&
+    selectedEntries.length === 1 &&
+    firstSelected &&
+    firstSelected.fileType === "file"
+  );
+
   if (!pane) {
     return (
       <div className="flex-1 flex items-center justify-center text-[12px] text-[var(--moba-text-muted)]">
@@ -240,20 +254,6 @@ export function FilePanel({
       }
     }
   };
-
-  const selectedEntries = useMemo<FileEntry[]>(() => {
-    if (!pane) return [];
-    const set = new Set(pane.selection);
-    return sortedEntries.filter((e) => set.has(e.path));
-  }, [pane, sortedEntries]);
-
-  const firstSelected = selectedEntries[0];
-  const canPreview = !!(
-    onPreviewSelected &&
-    selectedEntries.length === 1 &&
-    firstSelected &&
-    firstSelected.fileType === "file"
-  );
 
   const handleMkdir = () => {
     if (!onEmptyContext) return;
