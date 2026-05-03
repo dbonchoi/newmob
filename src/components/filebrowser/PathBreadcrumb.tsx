@@ -23,12 +23,14 @@ export function PathBreadcrumb({
     if (!editing) setEditValue(path);
   }, [path, editing]);
 
-  const isWindows = detectWindows ?? path.includes("\\");
+  const isDrivesRoot = path === "\\\\";
+  const isWindows = detectWindows ?? (path.includes("\\") || isDrivesRoot);
   const sep = isWindows ? "\\" : "/";
 
   const segments = useMemo(() => {
     if (!path) return [];
     if (path === "/") return [{ label: "/", path: "/" }];
+    if (isDrivesRoot) return [{ label: "Drives", path: "\\\\" }];
     if (isWindows) {
       const drive = path.match(/^([A-Z]):/i)?.[1];
       const rest = path.slice(drive ? 2 : 0).replace(/\\$/, "");

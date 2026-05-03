@@ -3,12 +3,21 @@ import {
   sftpListRemote,
   sftpListLocal,
   sftpLocalHome,
+  sftpLocalDrives,
   sftpAttach,
   sftpDetach,
   sftpRealpath,
   type FileEntry,
   type AttachOptions,
 } from "../lib/sftp";
+
+/**
+ * Virtual path used by the local pane on Windows to display the list of
+ * available drive letters as if they were folder entries. Reaching it via
+ * the breadcrumb's "Up" / Home or via the new drives picker lets users
+ * jump back from `C:\foo` to a drives view without typing.
+ */
+export const WINDOWS_DRIVES_ROOT = "\\\\";
 
 export type PaneSide = "local" | "remote";
 
@@ -92,6 +101,21 @@ async function listSide(
   side: PaneSide,
   path: string,
 ): Promise<FileEntry[]> {
+  if (side === "local" && path === WINDOWS_DRIVES_ROOT) {
+    // Synthesize folder-like entries from the available Windows drives so
+    // the standard file-list UI (sort, double-click to enter, etc.) works
+    // unchanged for the virtual drives root.
+    const drives = await sftpLocalDrives();
+    return drives.map((d) => ({
+      name: d.label,
+      path: d.path,
+      fileType: "dir" as const,
+      size: 0,
+      mtime: 0,
+      mode: 0,
+      symlinkTarget: null,
+    }));
+  }
   return side === "remote"
     ? sftpListRemote(sessionId, path)
     : sftpListLocal(path);
@@ -489,8 +513,14 @@ export const useSftpStore = create<SftpStoreState>((set, get) => ({
     const sess = get().sessions[sessionId];
     if (!sess) return;
     const path = sess[side].path;
+    if (!path || path === "/" || path === WINDOWS_DRIVES_ROOT) return;
     const isWin = path.includes("\\");
-    if (!path || path === "/" || /^[A-Z]:\\?$/i.test(path)) return;
+    // Going "up" from a drive root on the local Windows pane lands on
+    // the synthetic drives root so the user sees C:, D:, … as folders.
+    if (side === "local" && /^[A-Z]:\\?$/i.test(path)) {
+      await get().navigate(sessionId, side, WINDOWS_DRIVES_ROOT);
+      return;
+    }
     const sep = isWin ? "\\" : "/";
     const trimmed = path.endsWith(sep) ? path.slice(0, -1) : path;
     const idx = trimmed.lastIndexOf(sep);

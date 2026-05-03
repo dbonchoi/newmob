@@ -126,6 +126,10 @@ export function FilePanel({
   const [colWidths, setColWidths] = useState<ColWidths>(() => loadColWidths(side));
   const dragColRef = useRef<{ key: keyof ColWidths; startX: number; startW: number } | null>(null);
 
+  const resetCol = useCallback((key: keyof ColWidths) => {
+    setColWidths((prev) => ({ ...prev, [key]: DEFAULT_COL_WIDTHS[key] }));
+  }, []);
+
   const startColResize = useCallback(
     (key: keyof ColWidths, e: MouseEvent) => {
       e.preventDefault();
@@ -160,7 +164,9 @@ export function FilePanel({
   // looks like a Windows path. Lets the user jump back from `C:\foo` to a
   // list of drives (C:, D:, …) without typing the path manually.
   const showDrivesPicker =
-    side === "local" && !!pane?.path && /^[A-Z]:/i.test(pane.path);
+    side === "local" &&
+    !!pane?.path &&
+    (/^[A-Z]:/i.test(pane.path) || pane.path === "\\\\");
 
   const sortedEntries = useMemo<FileEntry[]>(() => {
     if (!pane) return [];
@@ -505,6 +511,7 @@ export function FilePanel({
                 dir={sortDir}
                 onClick={() => onHeaderClick("name")}
                 onResizeStart={(e) => startColResize("size", e)}
+                onResizeReset={() => resetCol("size")}
               />
               <SortHeader
                 label="Size"
@@ -513,6 +520,7 @@ export function FilePanel({
                 onClick={() => onHeaderClick("size")}
                 className="text-right"
                 onResizeStart={(e) => startColResize("mtime", e)}
+                onResizeReset={() => resetCol("mtime")}
               />
               <SortHeader
                 label="Modified"
@@ -520,6 +528,7 @@ export function FilePanel({
                 dir={sortDir}
                 onClick={() => onHeaderClick("mtime")}
                 onResizeStart={(e) => startColResize("type", e)}
+                onResizeReset={() => resetCol("type")}
               />
               <SortHeader
                 label="Type"
@@ -604,6 +613,7 @@ function SortHeader({
   onClick,
   className,
   onResizeStart,
+  onResizeReset,
 }: {
   label: string;
   active: boolean;
@@ -613,9 +623,12 @@ function SortHeader({
   /** When set, renders a 4-px drag handle on the right edge that resizes
    *  the *next* column. Omit on the last column. */
   onResizeStart?: (e: MouseEvent) => void;
+  /** Double-clicking the handle resets the affected column to its default. */
+  onResizeReset?: () => void;
 }) {
   return (
     <th
+      data-testid={`col-header-${label.toLowerCase()}`}
       className={`text-left px-1.5 py-0.5 cursor-pointer select-none border-b relative ${className ?? ""}`}
       style={{ borderColor: "var(--moba-divider)" }}
       onClick={onClick}
@@ -627,9 +640,14 @@ function SortHeader({
         <span
           role="separator"
           aria-orientation="vertical"
-          title="Drag to resize column"
+          data-testid={`col-resize-${label.toLowerCase()}`}
+          title="Drag to resize next column • double-click to reset"
           onClick={(e) => e.stopPropagation()}
           onMouseDown={onResizeStart}
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            onResizeReset?.();
+          }}
           className="absolute top-0 right-0 h-full w-[5px] cursor-col-resize hover:bg-[var(--moba-accent)]"
           style={{ zIndex: 1 }}
         />
