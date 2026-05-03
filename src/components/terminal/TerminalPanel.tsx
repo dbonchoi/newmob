@@ -12,6 +12,10 @@ import {
   type TerminalProfile,
   type TerminalSyntaxMode,
 } from "../../lib/terminalProfile";
+import {
+  getSessionNetworkSettings,
+  toNetworkSettingsPayload,
+} from "../../lib/networkSettings";
 import { TERMINAL_THEME_DEFINITIONS, resolveThemeId } from "../../lib/themes";
 import {
   findFontName,
@@ -34,6 +38,7 @@ import {
   closeTerminal,
   listenTerminalOutput,
   listenTerminalExit,
+  listenTerminalForwardError,
   encodeBase64,
   decodeBase64,
 } from "../../lib/ipc";
@@ -43,12 +48,19 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 import "@xterm/xterm/css/xterm.css";
 
 export interface SshConnectInfo {
+  /** Persisted session config id, if this terminal was opened from a
+   *  saved session. Used so the SessionEditor can subscribe to runtime
+   *  forward errors for the session it is editing. */
+  sessionId?: string;
   host: string;
   port: number;
   username: string;
   authMethod: string;
   authData: string | null;
   optionsJson?: string;
+  /** When false, the OSC 7 PROMPT_COMMAND/precmd snippet is NOT injected.
+   *  Default is undefined → treated as enabled. */
+  osc7AutoInject?: boolean;
 }
 
 interface TerminalPanelProps {
@@ -62,6 +74,7 @@ interface TerminalPanelProps {
   };
   terminalProfile?: TerminalProfile;
   visible?: boolean;
+  onCwdChange?: (cwd: string) => void;
 }
 
 const DEFAULT_FONT_SIZE = 14;
@@ -91,7 +104,12 @@ export function TerminalPanel({
   localShell,
   terminalProfile,
   visible = true,
+  onCwdChange,
 }: TerminalPanelProps) {
+  const cwdCallbackRef = useRef<typeof onCwdChange>(onCwdChange);
+  useEffect(() => {
+    cwdCallbackRef.current = onCwdChange;
+  }, [onCwdChange]);
   const containerRef = useRef<HTMLDivElement>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
@@ -704,6 +722,7 @@ export function TerminalPanel({
     let destroyed = false;
     let unlistenOutput: UnlistenFn | null = null;
     let unlistenExit: UnlistenFn | null = null;
+    let unlistenForwardError: UnlistenFn | null = null;
     let detachImeGuard: (() => void) | null = null;
     let resizeTimer: ReturnType<typeof setTimeout>;
 
@@ -726,6 +745,20 @@ export function TerminalPanel({
     term.loadAddon(searchAddon);
     term.loadAddon(new WebLinksAddon());
     term.open(el);
+
+    // OSC 7 — host writes its current working directory as `file://host/path`
+    // so the attached SFTP browser can follow `cd` automatically.
+    try {
+      term.parser.registerOscHandler(7, (data) => {
+        const cwd = parseOsc7(data);
+        if (cwd) {
+          cwdCallbackRef.current?.(cwd);
+        }
+        return true;
+      });
+    } catch {
+      /* parser API absent in some xterm builds */
+    }
 
     if (shouldUseLinuxImeGuard()) {
       // Linux WebKitGTK can forward IME preedit text through xterm before the final commit.
@@ -764,7 +797,19 @@ export function TerminalPanel({
     const { cols, rows } = term;
 
     const connectPromise = ssh
-      ? createSshTerminal(ssh.host, ssh.port, ssh.username, ssh.authMethod, ssh.authData, cols, rows)
+      ? createSshTerminal(
+          ssh.host,
+          ssh.port,
+          ssh.username,
+          ssh.authMethod,
+          ssh.authData,
+          cols,
+          rows,
+          (() => {
+            const ns = getSessionNetworkSettings(ssh.optionsJson);
+            return JSON.stringify(toNetworkSettingsPayload(ns));
+          })(),
+        )
       : createLocalTerminal(cols, rows, localShell?.id);
 
     if (ssh) {
@@ -795,12 +840,55 @@ export function TerminalPanel({
           term.write(output);
         });
 
+        if (ssh && ssh.osc7AutoInject !== false) {
+          // Best-effort: teach the remote shell to emit OSC 7 on every
+          // prompt so the SFTP browser can follow the cwd.  We send the
+          // snippet a short while after connection so the shell PS1 has
+          // already drawn at least once and the user typically still
+          // sees a clean prompt afterwards.
+          window.setTimeout(() => {
+            if (destroyed || sessionIdRef.current !== sid) return;
+            const snippet =
+              " __newmob_osc7(){ printf '\\033]7;file://%s%s\\033\\\\' \"${HOSTNAME:-localhost}\" \"${PWD}\"; };" +
+              " case \"${ZSH_VERSION:+zsh}${BASH_VERSION:+bash}\" in" +
+              " bash) PROMPT_COMMAND=\"__newmob_osc7${PROMPT_COMMAND:+;$PROMPT_COMMAND}\" ;;" +
+              " zsh) precmd_functions+=(__newmob_osc7) ;;" +
+              " esac; __newmob_osc7\r";
+            writeTerminal(sid, encodeBase64(snippet)).catch(() => {});
+          }, 1200);
+        }
+
         unlistenExit = await listenTerminalExit(sid, () => {
           appendEvent("disconnect", "Terminal session ended");
           if (loggingActiveRef.current && outputLogRef.current) {
             flushRecordedOutput("Session ended; saved recorded output");
           }
           term.write("\r\n\x1b[33m[Session ended]\x1b[0m\r\n");
+        });
+
+        // Surface per-row local-forward errors (parse, bind, accept,
+        // direct-tcpip open) in the same event log the user already sees
+        // for connection / auth / disconnect events. Also re-broadcast
+        // as a window-level CustomEvent keyed by the persisted session
+        // config id so an open SessionEditor can show the failure
+        // inline next to the offending forward row.
+        unlistenForwardError = await listenTerminalForwardError(sid, (err) => {
+          appendEvent(
+            "error",
+            `Local forward ${err.local} → ${err.remote}: ${err.message}`,
+          );
+          if (ssh?.sessionId) {
+            window.dispatchEvent(
+              new CustomEvent("newmob:forward-error", {
+                detail: {
+                  sessionConfigId: ssh.sessionId,
+                  local: err.local,
+                  remote: err.remote,
+                  message: err.message,
+                },
+              }),
+            );
+          }
         });
       })
       .catch((err) => {
@@ -818,6 +906,7 @@ export function TerminalPanel({
       clearTimeout(resizeTimer);
       unlistenOutput?.();
       unlistenExit?.();
+      unlistenForwardError?.();
       detachImeGuard?.();
       if (loggingActiveRef.current && outputLogRef.current) {
         flushRecordedOutput("Terminal closed; saved recorded output");
@@ -952,6 +1041,7 @@ export function TerminalPanel({
   return (
     <div
       ref={panelRef}
+      data-testid="terminal-pane"
       className={panelClasses}
       style={{ background: resolvedTheme.background ?? "#1d1f21" }}
       onWheel={(event) => {
@@ -1393,6 +1483,17 @@ function escapeHtml(value: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+function parseOsc7(data: string): string | null {
+  // OSC 7 payload looks like `file://hostname/path/with%20spaces`.
+  const match = data.match(/^file:\/\/[^/]*(\/.*)$/);
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
 }
 
 function encodeBinaryStringBase64(str: string): string {

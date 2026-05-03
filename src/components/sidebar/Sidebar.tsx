@@ -11,6 +11,7 @@ import {
   Wrench,
   Gamepad2,
   Bot,
+  FolderTree,
 } from "lucide-react";
 import { SessionTree } from "./SessionTree";
 import { useAppStore, type SideTab } from "../../stores/appStore";
@@ -19,12 +20,13 @@ import type { SessionConfig } from "../../lib/ipc";
 
 interface SidebarProps {
   onNewSession?: (groupPath?: string | null) => void;
+  onNewSftpSession?: () => void;
   onEditSession?: (session: SessionConfig) => void;
   onConnectSession?: (session: SessionConfig) => void;
   compact?: boolean;
 }
 
-export function Sidebar({ onNewSession, onEditSession, onConnectSession, compact = false }: SidebarProps) {
+export function Sidebar({ onNewSession, onNewSftpSession, onEditSession, onConnectSession, compact = false }: SidebarProps) {
   const {
     activeSideTab,
     setActiveSideTab,
@@ -86,7 +88,7 @@ export function Sidebar({ onNewSession, onEditSession, onConnectSession, compact
   };
 
   return (
-    <div className="h-full flex">
+    <div data-testid="sidebar" className="h-full flex">
       <div
         className="w-[26px] flex flex-col shrink-0"
         style={{ background: "var(--moba-tab-inactive)", borderRight: "1px solid var(--moba-sidebar-border)" }}
@@ -110,10 +112,10 @@ export function Sidebar({ onNewSession, onEditSession, onConnectSession, compact
       {!compact && (
       <div className="flex-1 flex flex-col min-w-0" style={{ background: "var(--moba-sidebar-bg)", borderRight: "1px solid var(--moba-sidebar-border)" }}>
         <div className="h-7 flex items-center gap-1 px-1.5 border-b shrink-0" style={{ borderColor: "var(--moba-divider)" }}>
-          <IconBtn title="New session" icon={<Plus className="w-3.5 h-3.5" />} onClick={() => onNewSession?.()} />
-          <IconBtn title="Edit selected session" icon={<Edit3 className="w-3.5 h-3.5" />} onClick={() => selectedSession && onEditSession?.(selectedSession)} disabled={!selectedSession} />
-          <IconBtn title="Duplicate selected session" icon={<Copy className="w-3.5 h-3.5" />} onClick={() => selectedSession && void duplicateSession(selectedSession.id)} disabled={!selectedSession} />
-          <IconBtn title="Delete selected session" icon={<Trash2 className="w-3.5 h-3.5" />} onClick={handleDelete} disabled={!selectedSession} />
+          <IconBtn testId="session-new" title="New session" icon={<Plus className="w-3.5 h-3.5" />} onClick={() => onNewSession?.()} />
+          <IconBtn testId="session-edit" title="Edit selected session" icon={<Edit3 className="w-3.5 h-3.5" />} onClick={() => selectedSession && onEditSession?.(selectedSession)} disabled={!selectedSession} />
+          <IconBtn testId="session-duplicate" title="Duplicate selected session" icon={<Copy className="w-3.5 h-3.5" />} onClick={() => selectedSession && void duplicateSession(selectedSession.id)} disabled={!selectedSession} />
+          <IconBtn testId="session-delete" title="Delete selected session" icon={<Trash2 className="w-3.5 h-3.5" />} onClick={handleDelete} disabled={!selectedSession} />
           <span className="moba-divider-v h-4 mx-1" />
           <IconBtn title="Refresh sessions" icon={<RefreshCw className="w-3.5 h-3.5" />} onClick={() => void loadSessions()} />
           <IconBtn title="Move selected session to Favorites" icon={<Star className="w-3.5 h-3.5" />} onClick={handleFavorite} disabled={!selectedSession} />
@@ -121,6 +123,8 @@ export function Sidebar({ onNewSession, onEditSession, onConnectSession, compact
           <div className="relative">
             <Search className="w-3 h-3 absolute left-1.5 top-1/2 -translate-y-1/2 text-[var(--moba-text-muted)]" />
             <input
+              data-testid="session-search"
+              aria-label="Search sessions"
               className="moba-input pl-6 w-[140px]"
               placeholder="Search sessions…"
               value={searchQuery}
@@ -138,6 +142,13 @@ export function Sidebar({ onNewSession, onEditSession, onConnectSession, compact
             <Clock className="w-3.5 h-3.5 mr-1 text-[var(--moba-text-muted)]" />
             Recent connections
             <div className="ml-auto flex items-center gap-1">
+              {onNewSftpSession && (
+                <IconBtn
+                  title="Open SFTP browser…"
+                  icon={<FolderTree className="w-3 h-3" />}
+                  onClick={() => onNewSftpSession()}
+                />
+              )}
               <IconBtn title="Refresh sessions" icon={<RefreshCw className="w-3 h-3" />} onClick={() => void loadSessions()} />
             </div>
           </div>
@@ -145,6 +156,15 @@ export function Sidebar({ onNewSession, onEditSession, onConnectSession, compact
             {recentSessions.length === 0 ? (
               <div className="px-2 py-2 text-[11px] text-[var(--moba-text-muted)]">
                 No recent connections yet.
+                {onNewSftpSession && (
+                  <button
+                    type="button"
+                    className="block mt-1 underline text-[var(--moba-accent)]"
+                    onClick={() => onNewSftpSession()}
+                  >
+                    Open SFTP browser…
+                  </button>
+                )}
               </div>
             ) : (
               recentSessions.map((session) => (
@@ -190,16 +210,19 @@ function UtilityPanel({ tab }: { tab: Exclude<SideTab, "sessions"> }) {
 function IconBtn({
   icon,
   title,
+  testId,
   onClick,
   disabled,
 }: {
   icon: React.ReactNode;
   title: string;
+  testId?: string;
   onClick?: () => void;
   disabled?: boolean;
 }) {
   return (
     <button
+      data-testid={testId}
       title={title}
       onClick={onClick}
       disabled={disabled}

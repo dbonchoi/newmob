@@ -2,11 +2,14 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { resolve } from "path";
 import { sshProxyPlugin } from "./vite-plugins/sshProxy";
+import { sftpProxyPlugin } from "./vite-plugins/sftpProxy";
 
 const isTauriBuild = !!process.env.TAURI_ENV_PLATFORM;
 
+const devPort = isTauriBuild ? 1420 : 5000;
+
 export default defineConfig({
-  plugins: [react(), ...(isTauriBuild ? [] : [sshProxyPlugin()])],
+  plugins: [react(), ...(isTauriBuild ? [] : [sshProxyPlugin(), sftpProxyPlugin()])],
   clearScreen: false,
   resolve: {
     alias: isTauriBuild
@@ -19,7 +22,7 @@ export default defineConfig({
         },
   },
   server: {
-    port: 5000,
+    port: devPort,
     strictPort: true,
     host: "0.0.0.0",
     allowedHosts: true,

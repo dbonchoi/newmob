@@ -1,0 +1,378 @@
+#!/usr/bin/env python3
+"""Minimal WebDriver client for Tauri native E2E via tauri-driver.
+
+This intentionally avoids adding a Node test runner dependency to the skill.
+It speaks the small W3C WebDriver subset needed by the qa-ui-auto DSL.
+"""
+from __future__ import annotations
+
+import base64
+import json
+import os
+import platform
+import shutil
+import socket
+import subprocess
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path.cwd()
+
+
+def native_binary(cfg: dict) -> Path:
+    explicit = cfg.get("app", {}).get("native_binary")
+    if explicit:
+        return Path(explicit).expanduser()
+    name = "newmob.exe" if platform.system() == "Windows" else "newmob"
+    return ROOT / "src-tauri" / "target" / "debug" / name
+
+
+def _tcp_ok(host: str, port: int, timeout: float = 1.0) -> bool:
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _quote_xpath_text(value: str) -> str:
+    if "'" not in value:
+        return f"'{value}'"
+    if '"' not in value:
+        return f'"{value}"'
+    parts = value.split("'")
+    return "concat(" + ", \"'\", ".join(f"'{p}'" for p in parts) + ")"
+
+
+def selector_strategy(selector: str, *, interactive: bool = False) -> tuple[str, str]:
+    """Map common Playwright-ish selectors to WebDriver selector strategies."""
+    selector = selector.strip()
+    if selector.startswith("text="):
+        text = selector[5:].strip()
+        if (text.startswith('"') and text.endswith('"')) or (
+            text.startswith("'") and text.endswith("'")
+        ):
+            text = text[1:-1]
+        q = _quote_xpath_text(text)
+        if interactive:
+            return "xpath", (
+                f"//button[contains(normalize-space(.), {q}) or contains(@aria-label, {q}) or contains(@title, {q})]"
+                f"|//*[@role='button' and (contains(normalize-space(.), {q}) or contains(@aria-label, {q}) or contains(@title, {q}))]"
+                f"|//a[contains(normalize-space(.), {q}) or contains(@aria-label, {q}) or contains(@title, {q})]"
+                f"|//input[contains(@value, {q}) or contains(@aria-label, {q}) or contains(@title, {q})]"
+            )
+        return "xpath", (
+            f"//*[contains(normalize-space(.), {q}) "
+            f"or contains(@aria-label, {q}) or contains(@title, {q})]"
+        )
+    if selector.startswith("role=button"):
+        name = ""
+        marker = "name="
+        if marker in selector:
+            raw = selector.split(marker, 1)[1].strip()
+            if raw.startswith("[") and raw.endswith("]"):
+                raw = raw[1:-1]
+            if (raw.startswith('"') and raw.endswith('"')) or (
+                raw.startswith("'") and raw.endswith("'")
+            ):
+                raw = raw[1:-1]
+            name = raw
+        if name:
+            q = _quote_xpath_text(name)
+            return "xpath", (
+                f"//button[normalize-space(.)={q} or @aria-label={q}]"
+                f"|//*[@role='button' and (normalize-space(.)={q} or @aria-label={q})]"
+            )
+        return "css selector", "button,[role='button']"
+    return "css selector", selector
+
+
+class WebDriverError(RuntimeError):
+    pass
+
+
+class TauriDriverProcess:
+    def __init__(self, cfg: dict, report_root: Path):
+        webdriver = cfg.get("webdriver") or {}
+        self.host = str(webdriver.get("host", "127.0.0.1"))
+        self.port = int(webdriver.get("port", 4444))
+        self.url = f"http://{self.host}:{self.port}"
+        self.proc: subprocess.Popen[str] | None = None
+        self.external = False
+        self.report_root = report_root
+        self.command = str(webdriver.get("tauri_driver", "tauri-driver"))
+        self.native_driver = webdriver.get("native_driver")
+        self.startup_timeout = float(webdriver.get("startup_timeout", 20))
+
+    def start(self) -> None:
+        if _tcp_ok(self.host, self.port):
+            self.external = True
+            return
+        cmd = [self.command]
+        if self.native_driver:
+            cmd += ["--native-driver", str(self.native_driver)]
+        out = self.report_root / "tauri-driver.out.log"
+        err = self.report_root / "tauri-driver.err.log"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        self.proc = subprocess.Popen(
+            cmd,
+            cwd=ROOT,
+            stdout=out.open("w", encoding="utf-8"),
+            stderr=err.open("w", encoding="utf-8"),
+            text=True,
+        )
+        deadline = time.time() + self.startup_timeout
+        while time.time() < deadline:
+            if self.proc.poll() is not None:
+                raise WebDriverError(
+                    f"tauri-driver exited early with code {self.proc.returncode}; "
+                    f"see {err}"
+                )
+            if _tcp_ok(self.host, self.port):
+                return
+            time.sleep(0.25)
+        raise WebDriverError(f"tauri-driver did not listen on {self.url}")
+
+    def stop(self) -> None:
+        if self.external or not self.proc:
+            return
+        self.proc.terminate()
+        try:
+            self.proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+
+
+class NativeSession:
+    def __init__(self, driver_url: str, application: Path):
+        self.driver_url = driver_url.rstrip("/")
+        self.application = application
+        self.session_id: str | None = None
+
+    def request(self, method: str, path: str, payload: dict | None = None) -> Any:
+        body = None
+        headers = {"Content-Type": "application/json"}
+        if payload is not None:
+            body = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self.driver_url}{path}", data=body, headers=headers, method=method
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                data = r.read().decode("utf-8")
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", errors="replace")
+            raise WebDriverError(f"HTTP {e.code}: {detail}") from e
+        if not data:
+            return None
+        parsed = json.loads(data)
+        value = parsed.get("value", parsed)
+        if isinstance(value, dict) and "error" in value:
+            raise WebDriverError(value.get("message") or value["error"])
+        return value
+
+    def start(self) -> None:
+        payload = {
+            "capabilities": {
+                "alwaysMatch": {
+                    "tauri:options": {
+                        "application": str(self.application.resolve())
+                    }
+                }
+            }
+        }
+        value = self.request("POST", "/session", payload)
+        sid = value.get("sessionId") if isinstance(value, dict) else None
+        if not sid:
+            raise WebDriverError(f"could not create WebDriver session: {value}")
+        self.session_id = sid
+        self.install_console_hook()
+
+    def close(self) -> None:
+        if self.session_id:
+            try:
+                self.request("DELETE", f"/session/{self.session_id}")
+            finally:
+                self.session_id = None
+
+    def endpoint(self, suffix: str) -> str:
+        if not self.session_id:
+            raise WebDriverError("WebDriver session is not started")
+        return f"/session/{self.session_id}{suffix}"
+
+    def find(self, selector: str, timeout: float = 10.0,
+             *, interactive: bool = False) -> str:
+        using, value = selector_strategy(selector, interactive=interactive)
+        deadline = time.time() + timeout
+        last_error = ""
+        while time.time() < deadline:
+            try:
+                found = self.request(
+                    "POST",
+                    self.endpoint("/element"),
+                    {"using": using, "value": value},
+                )
+                if isinstance(found, dict):
+                    element_id = (
+                        found.get("element-6066-11e4-a52e-4f735466cecf")
+                        or found.get("ELEMENT")
+                    )
+                    if element_id:
+                        return element_id
+            except Exception as e:  # keep polling until timeout
+                last_error = str(e)
+            time.sleep(0.25)
+        raise WebDriverError(f"element not found: {selector} {last_error}".strip())
+
+    def element_path(self, element_id: str, suffix: str = "") -> str:
+        return self.endpoint(f"/element/{element_id}{suffix}")
+
+    def click(self, selector: str) -> str:
+        element = self.find(selector, interactive=True)
+        self.request("POST", self.element_path(element, "/click"), {})
+        return f"clicked {selector}"
+
+    def fill(self, selector: str, text: str) -> str:
+        element = self.find(selector)
+        try:
+            self.request("POST", self.element_path(element, "/clear"), {})
+        except WebDriverError:
+            pass
+        self.request(
+            "POST",
+            self.element_path(element, "/value"),
+            {"text": text, "value": list(text)},
+        )
+        return f"filled {selector}"
+
+    def send_keys(self, text: str) -> str:
+        keys = {
+            "Enter": "\ue007",
+            "Tab": "\ue004",
+            "Escape": "\ue00c",
+            "Backspace": "\ue003",
+            "Delete": "\ue017",
+        }.get(text, text)
+        self.request(
+            "POST",
+            self.endpoint("/actions"),
+            {
+                "actions": [
+                    {
+                        "type": "key",
+                        "id": "keyboard",
+                        "actions": [
+                            {"type": "keyDown", "value": ch} for ch in keys
+                        ]
+                        + [{"type": "keyUp", "value": ch} for ch in keys],
+                    }
+                ]
+            },
+        )
+        return f"sent keys {text}"
+
+    def text(self, selector: str) -> str:
+        element = self.find(selector)
+        return str(self.request("GET", self.element_path(element, "/text")) or "")
+
+    def screenshot(self, target: Path) -> str:
+        data = self.request("GET", self.endpoint("/screenshot"))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(base64.b64decode(str(data)))
+        return str(target)
+
+    def execute(self, script: str) -> Any:
+        return self.request(
+            "POST", self.endpoint("/execute/sync"), {"script": script, "args": []}
+        )
+
+    def install_console_hook(self) -> None:
+        script = r"""
+        if (!window.__QA_UI_AUTO_CONSOLE__) {
+          window.__QA_UI_AUTO_CONSOLE__ = [];
+          for (const level of ['log', 'info', 'warn', 'error', 'debug']) {
+            const original = console[level] ? console[level].bind(console) : console.log.bind(console);
+            console[level] = (...args) => {
+              try {
+                window.__QA_UI_AUTO_CONSOLE__.push({
+                  level,
+                  time: new Date().toISOString(),
+                  args: args.map((arg) => {
+                    try {
+                      if (arg instanceof Error) return arg.stack || arg.message;
+                      if (typeof arg === 'string') return arg;
+                      return JSON.stringify(arg);
+                    } catch (_) {
+                      return String(arg);
+                    }
+                  })
+                });
+              } catch (_) {}
+              return original(...args);
+            };
+          }
+          window.addEventListener('error', (event) => {
+            window.__QA_UI_AUTO_CONSOLE__.push({
+              level: 'error',
+              time: new Date().toISOString(),
+              args: [event.message, event.filename, event.lineno, event.colno]
+            });
+          });
+          window.addEventListener('unhandledrejection', (event) => {
+            window.__QA_UI_AUTO_CONSOLE__.push({
+              level: 'error',
+              time: new Date().toISOString(),
+              args: ['unhandledrejection', String(event.reason)]
+            });
+          });
+        }
+        return true;
+        """
+        try:
+            self.execute(script)
+        except WebDriverError:
+            pass
+
+
+class NativeHarness:
+    def __init__(self, cfg: dict, report_root: Path):
+        self.cfg = cfg
+        self.report_root = report_root
+        self.application = native_binary(cfg)
+        self.driver = TauriDriverProcess(cfg, report_root)
+
+    def __enter__(self) -> "NativeHarness":
+        self.driver.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.driver.stop()
+
+    def create_session(self) -> NativeSession:
+        session = NativeSession(self.driver.url, self.application)
+        session.start()
+        return session
+
+
+def native_tool_issues(cfg: dict) -> list[str]:
+    issues: list[str] = []
+    if not shutil.which(str((cfg.get("webdriver") or {}).get("tauri_driver", "tauri-driver"))):
+        issues += [
+            "✗ tauri-driver not found on PATH.",
+            "  Install: cargo install tauri-driver --locked",
+            "  The agent may run this after explicit user approval.",
+        ]
+    if platform.system() == "Windows" and not (
+        (cfg.get("webdriver") or {}).get("native_driver") or shutil.which("msedgedriver")
+    ):
+        issues += [
+            "✗ msedgedriver not found on PATH.",
+            "  Download the Microsoft Edge Driver matching your Edge/WebView2 runtime,",
+            "  then put msedgedriver.exe on PATH or set webdriver.native_driver.",
+            "  This is not installed automatically because the version must match the local runtime.",
+        ]
+    return issues

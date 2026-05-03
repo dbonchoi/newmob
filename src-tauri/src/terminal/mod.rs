@@ -1,3 +1,5 @@
+pub mod forwards;
+pub mod network;
 pub mod pty;
 pub mod ssh;
 
@@ -5,8 +7,11 @@ use crate::state::AppState;
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use russh::Sig;
 use std::io::{Read, Write};
+use std::sync::Arc;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, State};
+use tokio::sync::Mutex as AsyncMutex;
+use tokio::task::JoinHandle;
 
 pub enum ActiveTerminal {
     Local {
@@ -16,9 +21,12 @@ pub enum ActiveTerminal {
         child: Mutex<Box<dyn portable_pty::Child + Send + Sync>>,
     },
     Ssh {
-        channel: tokio::sync::Mutex<russh::Channel<russh::client::Msg>>,
+        channel: AsyncMutex<russh::Channel<russh::client::Msg>>,
         #[allow(dead_code)]
-        handle: Mutex<russh::client::Handle<ssh::SshHandler>>,
+        handle: Arc<russh::client::Handle<ssh::SshHandler>>,
+        /// Listener tasks for any session-attached local port forwards.
+        /// `close_terminal` aborts these to release the bound TCP ports.
+        forwards: AsyncMutex<Vec<JoinHandle<()>>>,
     },
 }
 
@@ -76,6 +84,7 @@ pub async fn create_ssh_terminal(
     auth_data: Option<String>,
     cols: u16,
     rows: u16,
+    network_settings_json: Option<String>,
     state: State<'_, AppState>,
     app_handle: AppHandle,
 ) -> Result<String, String> {
@@ -90,12 +99,35 @@ pub async fn create_ssh_terminal(
         _ => ssh::SshAuth::Password(auth_data.unwrap_or_default()),
     };
 
+    let network = network::NetworkSettings::from_json(network_settings_json.as_deref());
+
     let (handle, channel, mut output_rx) =
-        ssh::connect_ssh(&host, port, &username, auth, cols, rows).await?;
+        ssh::connect_ssh(&host, port, &username, auth, cols, rows, network.as_ref()).await?;
+
+    let handle_arc = Arc::new(handle);
+
+    // Start any session-attached local port forwards. We capture the join
+    // handles so `close_terminal` can abort them and release the bound
+    // TCP listening ports.
+    let forward_handles = if let Some(n) = &network {
+        if !n.local_forwards.is_empty() {
+            forwards::spawn_local_forwards(
+                handle_arc.clone(),
+                &n.local_forwards,
+                app_handle.clone(),
+                session_id.clone(),
+            )
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
 
     let terminal = ActiveTerminal::Ssh {
-        channel: tokio::sync::Mutex::new(channel),
-        handle: Mutex::new(handle),
+        channel: AsyncMutex::new(channel),
+        handle: handle_arc,
+        forwards: AsyncMutex::new(forward_handles),
     };
 
     {
@@ -105,11 +137,29 @@ pub async fn create_ssh_terminal(
 
     let sid = session_id.clone();
     let app = app_handle.clone();
+    let terminals = state.terminals.clone();
     tokio::spawn(async move {
         let event_name = format!("terminal-output-{}", sid);
         while let Some(data) = output_rx.recv().await {
             let encoded = B64.encode(&data);
             let _ = app.emit(&event_name, encoded);
+        }
+        // SSH session ended naturally (peer closed, network drop, exit).
+        // Remove the terminal entry and abort any session-attached
+        // forward listeners so their bound TCP ports are released and
+        // the in-flight bridge tasks (owned by per-listener JoinSets)
+        // are torn down. This mirrors what `close_terminal` does on an
+        // explicit user close, so forwards always end with the SSH
+        // session — never outlive it.
+        let removed = {
+            let mut map = terminals.write().await;
+            map.remove(&sid)
+        };
+        if let Some(ActiveTerminal::Ssh { forwards, .. }) = removed {
+            let mut tasks = forwards.lock().await;
+            for h in tasks.drain(..) {
+                h.abort();
+            }
         }
         let _ = app.emit(&format!("terminal-exit-{}", sid), "closed");
     });
@@ -222,8 +272,18 @@ pub async fn close_terminal(
     session_id: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let mut terminals = state.terminals.write().await;
-    terminals.remove(&session_id);
+    let removed = {
+        let mut terminals = state.terminals.write().await;
+        terminals.remove(&session_id)
+    };
+    if let Some(ActiveTerminal::Ssh { forwards, .. }) = removed {
+        // Abort listener tasks so the local TCP ports are released
+        // before the SSH handle drops.
+        let mut tasks = forwards.lock().await;
+        for h in tasks.drain(..) {
+            h.abort();
+        }
+    }
     Ok(())
 }
 
@@ -288,6 +348,7 @@ pub async fn test_ssh_connection(
     username: String,
     auth_method: String,
     auth_data: Option<String>,
+    network_settings_json: Option<String>,
 ) -> Result<String, String> {
     let auth = match auth_method.as_str() {
         "Password" => ssh::SshAuth::Password(auth_data.unwrap_or_default()),
@@ -298,8 +359,11 @@ pub async fn test_ssh_connection(
         _ => ssh::SshAuth::Password(auth_data.unwrap_or_default()),
     };
 
+    let network = network::NetworkSettings::from_json(network_settings_json.as_deref());
+
     let start = std::time::Instant::now();
-    let (handle, channel, _rx) = ssh::connect_ssh(&host, port, &username, auth, 80, 24).await?;
+    let (handle, channel, _rx) =
+        ssh::connect_ssh(&host, port, &username, auth, 80, 24, network.as_ref()).await?;
     let elapsed = start.elapsed();
 
     // Close the test connection

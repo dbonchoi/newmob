@@ -35,6 +35,7 @@ export async function createSshTerminal(
   authData: string | null,
   cols: number,
   rows: number,
+  networkSettingsJson: string | null = null,
 ): Promise<string> {
   return invoke<string>("create_ssh_terminal", {
     host,
@@ -44,6 +45,7 @@ export async function createSshTerminal(
     authData,
     cols,
     rows,
+    networkSettingsJson,
   });
 }
 
@@ -53,6 +55,7 @@ export async function testSshConnection(
   username: string,
   authMethod: string,
   authData: string | null,
+  networkSettingsJson: string | null = null,
 ): Promise<string> {
   return invoke<string>("test_ssh_connection", {
     host,
@@ -60,6 +63,7 @@ export async function testSshConnection(
     username,
     authMethod,
     authData,
+    networkSettingsJson,
   });
 }
 
@@ -105,6 +109,24 @@ export async function listenTerminalExit(
   return listen(`terminal-exit-${sessionId}`, () => {
     callback();
   });
+}
+
+export interface ForwardErrorPayload {
+  local: string;
+  remote: string;
+  message: string;
+}
+
+export async function listenTerminalForwardError(
+  sessionId: string,
+  callback: (err: ForwardErrorPayload) => void,
+): Promise<UnlistenFn> {
+  return listen<ForwardErrorPayload>(
+    `terminal-forward-error-${sessionId}`,
+    (event) => {
+      callback(event.payload);
+    },
+  );
 }
 
 export function encodeBase64(str: string): string {

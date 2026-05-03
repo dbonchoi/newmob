@@ -4,6 +4,7 @@ import {
   Terminal as TerminalIcon,
   Folder,
   Monitor,
+  Network as NetworkIcon,
   SplitSquareVertical,
   Users,
   Maximize2,
@@ -57,6 +58,7 @@ export function TabBar() {
 
   return (
     <div
+      data-testid="tab-bar"
       className="h-8 flex items-end pl-2 pr-1 pt-1.5 gap-0"
       style={{ background: "linear-gradient(to bottom, var(--moba-tab-inactive), var(--moba-chrome-bg))" }}
     >
@@ -64,6 +66,9 @@ export function TabBar() {
       {tabs.map((tab) => (
         <div
           key={tab.id}
+          data-testid="tab-item"
+          data-tab-title={tab.title}
+          data-tab-type={tab.type}
           className="moba-tab"
           data-active={activeTabId === tab.id}
           onClick={() => setActiveTab(tab.id)}
@@ -85,6 +90,7 @@ export function TabBar() {
       ))}
 
       <button
+        data-testid="new-local-terminal"
         className="moba-tab"
         data-active={false}
         onClick={handleNewTab}
@@ -116,6 +122,8 @@ function TabIcon({ kind, ssh }: { kind: TabKind; ssh?: boolean }) {
     case "rdp":
     case "vnc":
       return <Monitor className="w-3 h-3" style={{ color: "#a04b9c" }} />;
+    case "nettools":
+      return <NetworkIcon className="w-3 h-3" style={{ color: "#236a98" }} />;
     default:
       return <TerminalIcon className="w-3 h-3" style={{ color: "#2b5d8b" }} />;
   }

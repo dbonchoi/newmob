@@ -200,6 +200,72 @@ describe("SessionEditor SSH settings tabs", () => {
     expect(screen.queryByDisplayValue("127.0.0.1:9090")).not.toBeInTheDocument();
   });
 
+  it("round-trips Network settings on save and load", async () => {
+    const user = userEvent.setup();
+
+    // First, save a session with custom network settings.
+    const { onClose } = renderEditor();
+    await user.type(screen.getByLabelText("Remote host"), "net.example.com");
+    await user.click(screen.getByRole("button", { name: /network settings/i }));
+
+    const proxySelect = screen.getByDisplayValue("None — direct connection");
+    await user.selectOptions(proxySelect, "HTTP CONNECT");
+    await user.type(screen.getByLabelText("Proxy host"), "proxy.corp");
+    await user.type(screen.getByLabelText("Proxy port"), "3128");
+    await user.type(screen.getByLabelText("Proxy username"), "alice");
+    await user.type(screen.getByLabelText("Proxy password"), "s3cret");
+
+    // Add a local forwarding row
+    await user.type(screen.getByLabelText("New forward local address"), "127.0.0.1:5432");
+    await user.type(screen.getByLabelText("New forward remote address"), "db.lan:5432");
+    await user.click(screen.getByRole("button", { name: "Add" }));
+
+    await user.click(screen.getByRole("button", { name: "OK" }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    const saved = ipcMocks.saveSession.mock.calls[0][0];
+    const opts = JSON.parse(saved.options_json);
+    expect(opts.networkSettings).toMatchObject({
+      proxyKind: "http",
+      proxyHost: "proxy.corp",
+      proxyPort: "3128",
+      proxyUser: "alice",
+    });
+    expect(opts.networkSettings.localForwards).toHaveLength(1);
+    expect(opts.networkSettings.localForwards[0]).toMatchObject({
+      local: "127.0.0.1:5432",
+      remote: "db.lan:5432",
+    });
+    // Proxy password must NOT be persisted unless "Save in vault" was ticked.
+    expect(opts.networkSettings.proxyPass).toBe("");
+
+    // Now reopen the editor with the saved options and verify hydration.
+    cleanup();
+    ipcMocks.saveSession.mockClear();
+    const reopened = {
+      id: saved.id,
+      name: saved.name,
+      session_type: "SSH",
+      group_path: null,
+      host: saved.host,
+      port: saved.port,
+      username: saved.username,
+      auth_method: "Password" as const,
+      options_json: saved.options_json,
+      created_at: 1,
+      updated_at: 1,
+      last_connected_at: null,
+      sort_order: 0,
+    };
+    renderEditor(reopened);
+    await user.click(screen.getByRole("button", { name: /network settings/i }));
+    expect(screen.getByDisplayValue("HTTP CONNECT")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("proxy.corp")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("3128")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("127.0.0.1:5432")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("db.lan:5432")).toBeInTheDocument();
+  });
+
   it("persists Bookmark settings through the session store save path", async () => {
     const user = userEvent.setup();
     const { onClose } = renderEditor();

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   X,
   Terminal as TerminalIcon,
@@ -24,6 +24,15 @@ import {
 } from "lucide-react";
 import { useSessionStore } from "../../stores/sessionStore";
 import { testSshConnection } from "../../lib/ipc";
+import {
+  getSessionNetworkSettings,
+  ipKindToLabel,
+  ipLabelToKind,
+  proxyKindToLabel,
+  proxyLabelToKind,
+  toNetworkSettingsPayload,
+  type NetworkSettings as NetworkSettingsValue,
+} from "../../lib/networkSettings";
 import { parseUserHostPort } from "../../lib/quickConnect";
 import {
   SESSION_ROOT_LABEL,
@@ -215,6 +224,7 @@ function AdvancedSshSettings({
   remoteEnv, setRemoteEnv,
   sshBrowser, setSshBrowser,
   followPath, setFollowPath,
+  osc7AutoInject, setOsc7AutoInject,
   authRadio, setAuthRadio,
   showPwd, setShowPwd,
   password, setPassword,
@@ -233,6 +243,7 @@ function AdvancedSshSettings({
   remoteEnv: string; setRemoteEnv: (v: string) => void;
   sshBrowser: string; setSshBrowser: (v: string) => void;
   followPath: boolean; setFollowPath: (v: boolean) => void;
+  osc7AutoInject: boolean; setOsc7AutoInject: (v: boolean) => void;
   authRadio: string; setAuthRadio: (v: string) => void;
   showPwd: boolean; setShowPwd: (v: boolean) => void;
   password: string; setPassword: (v: string) => void;
@@ -300,6 +311,13 @@ function AdvancedSshSettings({
         <label className="ml-3 flex items-center gap-1.5">
           <Checkbox checked={followPath} onChange={setFollowPath} />
           Follow SSH path (experimental)
+        </label>
+        <label
+          className="ml-3 flex items-center gap-1.5"
+          title="Inject a tiny PROMPT_COMMAND/precmd snippet so the SFTP browser can follow your shell's working directory."
+        >
+          <Checkbox checked={osc7AutoInject} onChange={setOsc7AutoInject} />
+          Auto-inject OSC 7 cwd reporting
         </label>
       </Field>
 
@@ -438,29 +456,71 @@ function TerminalSettings({
   );
 }
 
-function NetworkSettings() {
-  const [proxy, setProxy] = useState("None — direct connection");
-  const [proxyHost, setProxyHost] = useState("");
-  const [proxyPort, setProxyPort] = useState("");
-  const [proxyUser, setProxyUser] = useState("");
-  const [proxyPass, setProxyPass] = useState("");
-  const [proxySave, setProxySave] = useState(false);
-  const [keepAlive, setKeepAlive] = useState(true);
-  const [keepAliveInterval, setKeepAliveInterval] = useState("60");
-  const [tcpNodelay, setTcpNodelay] = useState(true);
-  const [disableNagle, setDisableNagle] = useState(false);
-  const [ipVersion, setIpVersion] = useState("Auto (prefer IPv4)");
-  const [forwards, setForwards] = useState([
-    {
-      id: "default",
-      local: "127.0.0.1:5432",
-      remote: "db.internal:5432",
-      desc: "Postgres replica",
-    },
-  ]);
+function NetworkSettings({
+  value,
+  onChange,
+  sessionConfigId,
+}: {
+  value: NetworkSettingsValue;
+  onChange: (next: NetworkSettingsValue) => void;
+  /** When set, the Network tab subscribes to runtime forward errors
+   *  for this saved session and renders the latest failure inline next
+   *  to the offending row. */
+  sessionConfigId?: string;
+}) {
   const [newFwdLocal, setNewFwdLocal] = useState("");
   const [newFwdRemote, setNewFwdRemote] = useState("");
   const [newFwdDesc, setNewFwdDesc] = useState("");
+  // Per-row latest forward error, keyed by `${local}->${remote}`.
+  const [forwardErrors, setForwardErrors] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!sessionConfigId) return;
+    const onErr = (ev: Event) => {
+      const detail = (ev as CustomEvent<{
+        sessionConfigId: string;
+        local: string;
+        remote: string;
+        message: string;
+      }>).detail;
+      if (!detail || detail.sessionConfigId !== sessionConfigId) return;
+      setForwardErrors((m) => ({
+        ...m,
+        [`${detail.local}->${detail.remote}`]: detail.message,
+      }));
+    };
+    window.addEventListener("newmob:forward-error", onErr as EventListener);
+    return () => window.removeEventListener("newmob:forward-error", onErr as EventListener);
+  }, [sessionConfigId]);
+
+  const patch = (delta: Partial<NetworkSettingsValue>) => onChange({ ...value, ...delta });
+  const proxy = proxyKindToLabel(value.proxyKind);
+  const proxyHost = value.proxyHost;
+  const proxyPort = value.proxyPort;
+  const proxyUser = value.proxyUser;
+  const proxyPass = value.proxyPass;
+  const proxySave = value.proxySaveAuth;
+  const keepAlive = value.keepAlive;
+  const keepAliveInterval = value.keepAliveIntervalSecs;
+  const tcpNodelay = value.tcpNodelay;
+  const disableNagle = value.disableNagle;
+  const ipVersion = ipKindToLabel(value.ipVersion);
+  const forwards = value.localForwards;
+
+  const setProxy = (label: string) => patch({ proxyKind: proxyLabelToKind(label) });
+  const setProxyHost = (v: string) => patch({ proxyHost: v });
+  const setProxyPort = (v: string) => patch({ proxyPort: v });
+  const setProxyUser = (v: string) => patch({ proxyUser: v });
+  const setProxyPass = (v: string) => patch({ proxyPass: v });
+  const setProxySave = (v: boolean) => patch({ proxySaveAuth: v });
+  const setKeepAlive = (v: boolean) => patch({ keepAlive: v });
+  const setKeepAliveInterval = (v: string) => patch({ keepAliveIntervalSecs: v });
+  const setTcpNodelay = (v: boolean) => patch({ tcpNodelay: v });
+  const setDisableNagle = (v: boolean) => patch({ disableNagle: v });
+  const setIpVersion = (label: string) => patch({ ipVersion: ipLabelToKind(label) });
+  const setForwards = (
+    updater: (items: NetworkSettingsValue["localForwards"]) => NetworkSettingsValue["localForwards"],
+  ) => patch({ localForwards: updater(value.localForwards) });
 
   const addForward = () => {
     if (!newFwdLocal.trim() || !newFwdRemote.trim()) return;
@@ -546,10 +606,16 @@ function NetworkSettings() {
 
       <Field label="TCP options">
         <label className="flex items-center gap-1.5">
-          <Checkbox checked={tcpNodelay} onChange={setTcpNodelay} /> TCP_NODELAY
+          <Checkbox
+            checked={tcpNodelay}
+            onChange={(v) => patch({ tcpNodelay: v, disableNagle: v })}
+          /> TCP_NODELAY
         </label>
         <label className="ml-3 flex items-center gap-1.5">
-          <Checkbox checked={disableNagle} onChange={setDisableNagle} /> Disable Nagle algorithm
+          <Checkbox
+            checked={disableNagle}
+            onChange={(v) => patch({ disableNagle: v, tcpNodelay: v })}
+          /> Disable Nagle algorithm
         </label>
       </Field>
 
@@ -568,43 +634,58 @@ function NetworkSettings() {
             <span className="w-32">→ Remote address:port</span>
             <span>Description</span>
           </div>
-          {forwards.map((forward) => (
-            <div key={forward.id} className="flex items-center gap-1.5">
-              <input
-                className="moba-input w-32"
-                value={forward.local}
-                aria-label="Forward local address"
-                onChange={(e) =>
-                  setForwards((items) =>
-                    items.map((item) => item.id === forward.id ? { ...item, local: e.target.value } : item),
-                  )
-                }
-              />
-              <input
-                className="moba-input w-40"
-                value={forward.remote}
-                aria-label="Forward remote address"
-                onChange={(e) =>
-                  setForwards((items) =>
-                    items.map((item) => item.id === forward.id ? { ...item, remote: e.target.value } : item),
-                  )
-                }
-              />
-              <input
-                className="moba-input flex-1"
-                value={forward.desc}
-                aria-label="Forward description"
-                onChange={(e) =>
-                  setForwards((items) =>
-                    items.map((item) => item.id === forward.id ? { ...item, desc: e.target.value } : item),
-                  )
-                }
-              />
-              <button className="moba-btn" type="button" onClick={() => setForwards((items) => items.filter((item) => item.id !== forward.id))}>
-                Remove
-              </button>
-            </div>
-          ))}
+          {forwards.map((forward) => {
+            const errKey = `${forward.local.trim()}->${forward.remote.trim()}`;
+            const rowError = forwardErrors[errKey];
+            return (
+              <div key={forward.id} className="flex flex-col gap-0.5">
+                <div className="flex items-center gap-1.5">
+                  <input
+                    className="moba-input w-32"
+                    value={forward.local}
+                    aria-label="Forward local address"
+                    onChange={(e) =>
+                      setForwards((items) =>
+                        items.map((item) => item.id === forward.id ? { ...item, local: e.target.value } : item),
+                      )
+                    }
+                  />
+                  <input
+                    className="moba-input w-40"
+                    value={forward.remote}
+                    aria-label="Forward remote address"
+                    onChange={(e) =>
+                      setForwards((items) =>
+                        items.map((item) => item.id === forward.id ? { ...item, remote: e.target.value } : item),
+                      )
+                    }
+                  />
+                  <input
+                    className="moba-input flex-1"
+                    value={forward.desc}
+                    aria-label="Forward description"
+                    onChange={(e) =>
+                      setForwards((items) =>
+                        items.map((item) => item.id === forward.id ? { ...item, desc: e.target.value } : item),
+                      )
+                    }
+                  />
+                  <button className="moba-btn" type="button" onClick={() => setForwards((items) => items.filter((item) => item.id !== forward.id))}>
+                    Remove
+                  </button>
+                </div>
+                {rowError && (
+                  <div
+                    className="text-[11px] text-red-400 ml-[2px]"
+                    role="status"
+                    data-testid={`forward-row-error-${forward.id}`}
+                  >
+                    {rowError}
+                  </div>
+                )}
+              </div>
+            );
+          })}
           <div className="flex items-center gap-1.5">
             <input className="moba-input w-32" placeholder="127.0.0.1:9090" value={newFwdLocal} aria-label="New forward local address" onChange={(e) => setNewFwdLocal(e.target.value)} />
             <input className="moba-input w-40" placeholder="metrics.lan:9090" value={newFwdRemote} aria-label="New forward remote address" onChange={(e) => setNewFwdRemote(e.target.value)} />
@@ -645,6 +726,7 @@ function BookmarkSettings({
     <div data-testid="bookmark-settings" className="grid grid-cols-12 gap-x-3 gap-y-2.5 text-[12px]">
       <Field label="Session name">
         <input
+          data-testid="session-name"
           className="moba-input w-72"
           value={name}
           aria-label="Session name"
@@ -753,10 +835,16 @@ function BookmarkSettings({
 interface SessionEditorProps {
   session?: SessionConfig;
   defaultGroupPath?: string | null;
+  /**
+   * Pre-select the protocol when creating a *new* session (no `session`
+   * prop). Accepts a session-type string (e.g. `"SFTP"`, `"SSH"`); falls
+   * back to SSH if unrecognized. Ignored when editing an existing session.
+   */
+  initialProto?: string;
   onClose: () => void;
 }
 
-export function SessionEditor({ session, defaultGroupPath = null, onClose }: SessionEditorProps) {
+export function SessionEditor({ session, defaultGroupPath = null, initialProto, onClose }: SessionEditorProps) {
   const { addSession, updateSession, removeSession, createFolderPath, sessions, groups } = useSessionStore();
   const isEdit = !!session;
 
@@ -764,7 +852,7 @@ export function SessionEditor({ session, defaultGroupPath = null, onClose }: Ses
 
   /* --- core fields --- */
   const [proto, setProto] = useState<Proto>(
-    sessionTypeToProto(session?.session_type),
+    session ? sessionTypeToProto(session.session_type) : sessionTypeToProto(initialProto),
   );
   const [section, setSection] = useState<SectionTab>("advanced");
   const [name, setName] = useState(session?.name ?? "");
@@ -803,6 +891,7 @@ export function SessionEditor({ session, defaultGroupPath = null, onClose }: Ses
   const [remoteEnv, setRemoteEnv] = useState(() => optionString(initialOptions, "remoteEnv", "Interactive shell"));
   const [sshBrowser, setSshBrowser] = useState(() => optionString(initialOptions, "sshBrowser", "SFTP protocol (recommended)"));
   const [followPath, setFollowPath] = useState(() => optionBoolean(initialOptions, "followPath", true));
+  const [osc7AutoInject, setOsc7AutoInject] = useState(() => optionBoolean(initialOptions, "osc7AutoInject", true));
   const [usePrivKey, setUsePrivKey] = useState(
     extractAuthType(session?.auth_method) === "PrivateKey",
   );
@@ -818,6 +907,11 @@ export function SessionEditor({ session, defaultGroupPath = null, onClose }: Ses
   /* --- terminal profile --- */
   const [terminalProfile, setTerminalProfile] = useState<TerminalProfile>(() =>
     getSessionTerminalProfile(session?.options_json) ?? loadGlobalTerminalProfile(),
+  );
+
+  /* --- network settings --- */
+  const [networkSettings, setNetworkSettings] = useState<NetworkSettingsValue>(
+    () => getSessionNetworkSettings(session?.options_json),
   );
 
   /* --- test connection --- */
@@ -900,8 +994,14 @@ export function SessionEditor({ session, defaultGroupPath = null, onClose }: Ses
         ...previousOptions,
         x11, compression, startupCmd, jumpHost: jumpHost || "",
         jumpUser, jumpPort, description, tags, doNotExit,
-        remoteEnv, sshBrowser, followPath, usePrivKey, useJump,
+        remoteEnv, sshBrowser, followPath, osc7AutoInject, usePrivKey, useJump,
         terminalProfile,
+        // Strip the proxy password unless the user explicitly opted into
+        // "Save in vault". `options_json` lands in the SQLite session row
+        // in plaintext, so this is the gate keeping secrets out at rest.
+        networkSettings: networkSettings.proxySaveAuth
+          ? networkSettings
+          : { ...networkSettings, proxyPass: "" },
       }),
       created_at: session?.created_at ?? now,
       updated_at: now,
@@ -975,6 +1075,7 @@ export function SessionEditor({ session, defaultGroupPath = null, onClose }: Ses
     setRemoteEnv(optionString(nextOptions, "remoteEnv", "Interactive shell"));
     setSshBrowser(optionString(nextOptions, "sshBrowser", "SFTP protocol (recommended)"));
     setFollowPath(optionBoolean(nextOptions, "followPath", true));
+    setOsc7AutoInject(optionBoolean(nextOptions, "osc7AutoInject", true));
     setUsePrivKey(nextAuth === "PrivateKey");
     setUseJump(optionBoolean(nextOptions, "useJump", false));
     setJumpHost(optionString(nextOptions, "jumpHost", ""));
@@ -983,6 +1084,7 @@ export function SessionEditor({ session, defaultGroupPath = null, onClose }: Ses
     setDescription(optionString(nextOptions, "description", ""));
     setTags(optionString(nextOptions, "tags", ""));
     setTerminalProfile(getSessionTerminalProfile(session?.options_json) ?? loadGlobalTerminalProfile());
+    setNetworkSettings(getSessionNetworkSettings(session?.options_json));
     setSaveError(null);
     setTestResult(null);
   };
@@ -1049,6 +1151,7 @@ export function SessionEditor({ session, defaultGroupPath = null, onClose }: Ses
         username,
         authMethod,
         authData,
+        JSON.stringify(toNetworkSettingsPayload(networkSettings)),
       );
       setTestResult({ ok: true, msg });
     } catch (err) {
@@ -1077,6 +1180,7 @@ export function SessionEditor({ session, defaultGroupPath = null, onClose }: Ses
       style={{ background: "rgba(20,30,45,0.4)" }}
     >
       <div
+        data-testid="session-editor"
         className="w-[1020px] max-w-[96%] max-h-[92vh] flex flex-col rounded-[6px] shadow-2xl border overflow-hidden"
         style={{ background: "var(--moba-panel-bg)", borderColor: "var(--moba-chrome-border)", color: "var(--moba-text)" }}
       >
@@ -1122,6 +1226,7 @@ export function SessionEditor({ session, defaultGroupPath = null, onClose }: Ses
             {PROTOS.map((p) => (
               <button
                 key={p.id}
+                data-testid={`session-proto-${p.id.toLowerCase()}`}
                 className="moba-proto-btn"
                 data-active={proto === p.id}
                 onClick={() => handleProtoChange(p.id)}
@@ -1159,6 +1264,7 @@ export function SessionEditor({ session, defaultGroupPath = null, onClose }: Ses
               </label>
               <div className="col-span-5 flex items-center gap-1">
                 <input
+                  data-testid="session-host"
                   className="moba-input flex-1"
                   value={host}
                   onChange={(e) => setHost(e.target.value)}
@@ -1180,6 +1286,7 @@ export function SessionEditor({ session, defaultGroupPath = null, onClose }: Ses
                 <span>Specify username</span>
               </label>
               <input
+                data-testid="session-user"
                 className="moba-input col-span-2"
                 value={username}
                 disabled={!specifyUser}
@@ -1190,6 +1297,7 @@ export function SessionEditor({ session, defaultGroupPath = null, onClose }: Ses
 
               <label className="col-span-2 text-[12px] text-right">Port</label>
               <input
+                data-testid="session-port"
                 className="moba-input col-span-2"
                 value={port}
                 aria-label="Port"
@@ -1214,6 +1322,7 @@ export function SessionEditor({ session, defaultGroupPath = null, onClose }: Ses
           {sectionTabs.map((t) => (
             <button
               key={t.id}
+              data-testid={`session-section-${t.id}`}
               className="moba-section-tab"
               data-active={activeSection === t.id}
               onClick={() => setSection(t.id)}
@@ -1240,6 +1349,7 @@ export function SessionEditor({ session, defaultGroupPath = null, onClose }: Ses
               remoteEnv={remoteEnv} setRemoteEnv={setRemoteEnv}
               sshBrowser={sshBrowser} setSshBrowser={setSshBrowser}
               followPath={followPath} setFollowPath={setFollowPath}
+              osc7AutoInject={osc7AutoInject} setOsc7AutoInject={setOsc7AutoInject}
               authRadio={authRadio} setAuthRadio={handleAuthRadio}
               showPwd={showPwd} setShowPwd={setShowPwd}
               password={password} setPassword={setPassword}
@@ -1262,7 +1372,13 @@ export function SessionEditor({ session, defaultGroupPath = null, onClose }: Ses
           {activeSection === "terminal" && (
             <TerminalSettings profile={terminalProfile} onProfileChange={setTerminalProfile} />
           )}
-          {activeSection === "network" && <NetworkSettings />}
+          {activeSection === "network" && (
+            <NetworkSettings
+              value={networkSettings}
+              onChange={setNetworkSettings}
+              sessionConfigId={session?.id}
+            />
+          )}
           {activeSection === "bookmark" && (
             <BookmarkSettings
               name={name} setName={setName}
@@ -1332,6 +1448,7 @@ export function SessionEditor({ session, defaultGroupPath = null, onClose }: Ses
           </button>
           <button
             className="moba-btn"
+            data-testid="session-save"
             data-primary="true"
             onClick={handleSave}
             type="button"
