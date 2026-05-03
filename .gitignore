@@ -98,3 +98,4 @@ temp/
 .breakpoints
 replit.nix
 /attached_assets
+tsconfig.tsbuildinfo
