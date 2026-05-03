@@ -87,3 +87,14 @@ config.local.toml
 logs/
 tmp/
 temp/
+
+# Replit
+.cache/
+.local/
+.replit
+.replit-artifact/
+.config/
+.upm/
+.breakpoints
+replit.nix
+/attached_assets
