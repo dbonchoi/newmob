@@ -158,6 +158,103 @@ describe("SFTP file-list column width persistence", () => {
     expect(reloaded.size).toBe(stored.size);
   });
 
+  it("stores independent widths for the local and remote panes and restores both on reload", () => {
+    seed();
+
+    // 1. Resize the Size column on the LOCAL pane (drag +60px).
+    const { unmount: unmountLocal } = render(
+      <FilePanel
+        sessionId={SESSION_ID}
+        side="local"
+        onItemDoubleClick={vi.fn()}
+        onEmptyContext={vi.fn(() => [])}
+      />,
+    );
+    const localHandle = document.querySelector(
+      '[data-testid="col-resize-size"]',
+    ) as HTMLElement;
+    fireEvent.mouseDown(localHandle, { clientX: 200 });
+    fireEvent(window, new MouseEvent("mousemove", { clientX: 260 }));
+    fireEvent(window, new MouseEvent("mouseup"));
+    const localStored = JSON.parse(
+      localStorage.getItem("newmob.sftp.cols.local") ?? "{}",
+    );
+    expect(localStored.size).toBeGreaterThanOrEqual(140);
+    unmountLocal();
+
+    // 2. Resize the Size column on the REMOTE pane to a *different* width
+    //    (drag +160px). Each pane is keyed under its own side, so the local
+    //    width must not be perturbed.
+    const { unmount: unmountRemote } = render(
+      <FilePanel
+        sessionId={SESSION_ID}
+        side="remote"
+        subtitle="u@h"
+        onItemDoubleClick={vi.fn()}
+        onEmptyContext={vi.fn(() => [])}
+      />,
+    );
+    const remoteHandle = document.querySelector(
+      '[data-testid="col-resize-size"]',
+    ) as HTMLElement;
+    fireEvent.mouseDown(remoteHandle, { clientX: 200 });
+    fireEvent(window, new MouseEvent("mousemove", { clientX: 360 }));
+    fireEvent(window, new MouseEvent("mouseup"));
+    const remoteStored = JSON.parse(
+      localStorage.getItem("newmob.sftp.cols.remote") ?? "{}",
+    );
+    expect(remoteStored.size).toBeGreaterThanOrEqual(240);
+
+    // Local key is untouched after editing the remote pane.
+    const localAfter = JSON.parse(
+      localStorage.getItem("newmob.sftp.cols.local") ?? "{}",
+    );
+    expect(localAfter.size).toBe(localStored.size);
+    expect(remoteStored.size).not.toBe(localStored.size);
+    unmountRemote();
+
+    // 3. Re-mount both panes and confirm each restores ITS OWN width
+    //    independently from the other.
+    render(
+      <FilePanel
+        sessionId={SESSION_ID}
+        side="local"
+        onItemDoubleClick={vi.fn()}
+        onEmptyContext={vi.fn(() => [])}
+      />,
+    );
+    const localReloadHandle = document.querySelector(
+      '[data-testid="col-resize-size"]',
+    ) as HTMLElement;
+    // Nudging the handle by 0px should re-save the loaded width.
+    fireEvent.mouseDown(localReloadHandle, { clientX: 100 });
+    fireEvent(window, new MouseEvent("mousemove", { clientX: 100 }));
+    fireEvent(window, new MouseEvent("mouseup"));
+    expect(
+      JSON.parse(localStorage.getItem("newmob.sftp.cols.local") ?? "{}").size,
+    ).toBe(localStored.size);
+    cleanup();
+
+    render(
+      <FilePanel
+        sessionId={SESSION_ID}
+        side="remote"
+        subtitle="u@h"
+        onItemDoubleClick={vi.fn()}
+        onEmptyContext={vi.fn(() => [])}
+      />,
+    );
+    const remoteReloadHandle = document.querySelector(
+      '[data-testid="col-resize-size"]',
+    ) as HTMLElement;
+    fireEvent.mouseDown(remoteReloadHandle, { clientX: 100 });
+    fireEvent(window, new MouseEvent("mousemove", { clientX: 100 }));
+    fireEvent(window, new MouseEvent("mouseup"));
+    expect(
+      JSON.parse(localStorage.getItem("newmob.sftp.cols.remote") ?? "{}").size,
+    ).toBe(remoteStored.size);
+  });
+
   it("double-clicking a resize handle restores that column to its default width", () => {
     seed();
     // Pre-seed all four columns with a non-default width.
