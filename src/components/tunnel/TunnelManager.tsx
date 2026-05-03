@@ -153,8 +153,11 @@ export function TunnelManager({ onStatusMessage, onClose }: Props) {
       setStatus(info);
       if (info.status === "error") {
         onStatusMessage?.(`Tunnel “${t.name}” failed: ${info.error ?? "unknown error"}`);
-      } else {
+      } else if (info.status === "running") {
         onStatusMessage?.(`Tunnel “${t.name}” running on ${t.listenHost}:${t.listenPort}`);
+      } else {
+        // "starting" — final outcome will arrive on the tunnel-status event.
+        onStatusMessage?.(`Tunnel “${t.name}” starting…`);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

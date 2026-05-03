@@ -220,31 +220,30 @@ export function TunnelEditor({ initial, sessions, focus, onSave, onCancel }: Pro
               title={isRemote ? "Remote clients" : "Local clients"}
               subtitle={isRemote ? "On the SSH server side" : "Apps on this computer"}
             >
-              <Field label={forwardedLabel} disabled={isRemote}>
+              <Field label={forwardedLabel}>
                 <input
                   className="moba-input w-24"
                   type="number"
                   placeholder="0"
                   value={draft.listenPort || ""}
                   onChange={(e) => update("listenPort", parseInt(e.target.value || "0", 10) || 0)}
-                  disabled={isRemote}
                 />
                 <span className="text-[11px] ml-1" style={{ color: "var(--moba-text-muted)" }}>
-                  (listen)
+                  {isRemote ? "(server bind)" : "(listen)"}
                 </span>
               </Field>
-              <Field label="Listen address" disabled={isRemote}>
+              <Field label={isRemote ? "Bind address" : "Listen address"}>
                 <input
                   className="moba-input w-32"
-                  placeholder="127.0.0.1"
+                  placeholder={isRemote ? "0.0.0.0" : "127.0.0.1"}
                   value={draft.listenHost}
                   onChange={(e) => update("listenHost", e.target.value)}
-                  disabled={isRemote}
                 />
               </Field>
               {isRemote && (
                 <div className="text-[11px] mt-2" style={{ color: "var(--moba-text-muted)" }}>
-                  Remote-clients fields are configured by the SSH server when using Remote forwarding.
+                  The SSH server will listen on this address/port and forward
+                  inbound connections to the local target on the right.
                 </div>
               )}
               <div className="flex items-center justify-end mt-2">
@@ -326,6 +325,11 @@ export function TunnelEditor({ initial, sessions, focus, onSave, onCancel }: Pro
                   Save credentials to disk
                 </label>
               </Field>
+              {draft.ssh.saveAuth && draft.ssh.authMethod === "Password" && (
+                <div className="text-[10.5px] pl-[6.25rem]" style={{ color: "#a04b00" }}>
+                  Stored in plaintext in the app data folder until secure credential storage lands.
+                </div>
+              )}
             </DiagramCard>
 
             {/* Right column: Remote/SOCKS endpoint */}
