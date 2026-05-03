@@ -33,6 +33,12 @@ pub fn run() {
 
             app.manage(AppState::new(conn));
 
+            // Auto-start any tunnels with autostart=true.
+            let app_for_autostart = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                tunnel::autostart_tunnels(app_for_autostart).await;
+            });
+
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
@@ -94,6 +100,7 @@ pub fn run() {
             tunnel::start_all_tunnels,
             tunnel::stop_all_tunnels,
             tunnel::reorder_tunnels,
+            tunnel::test_tunnel,
             tunnel::get_tunnel_status,
             tunnel::list_tunnel_statuses,
             exit_app,

@@ -19,6 +19,7 @@ import type { SessionConfig } from "../../lib/ipc";
 interface Props {
   initial?: TunnelConfig;
   sessions: SessionConfig[];
+  focus?: "auth";
   onSave: (config: TunnelConfig) => Promise<void> | void;
   onCancel: () => void;
 }
@@ -29,7 +30,7 @@ const KIND_OPTIONS: { id: TunnelKind; label: string; description: string }[] = [
   { id: "Dynamic", label: "Dynamic port forwarding (SOCKS proxy)", description: "Generic SOCKS5 proxy tunnelled over SSH" },
 ];
 
-export function TunnelEditor({ initial, sessions, onSave, onCancel }: Props) {
+export function TunnelEditor({ initial, sessions, focus, onSave, onCancel }: Props) {
   const [draft, setDraft] = useState<TunnelConfig>(() => initial ?? defaultTunnel("Local"));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -37,6 +38,18 @@ export function TunnelEditor({ initial, sessions, onSave, onCancel }: Props) {
   useEffect(() => {
     if (initial) setDraft(initial);
   }, [initial]);
+
+  useEffect(() => {
+    if (focus === "auth") {
+      // Defer one tick so the input has been mounted, then focus it.
+      const id = window.setTimeout(() => {
+        const el = document.getElementById("tunnel-editor-auth-data") as HTMLInputElement | null;
+        el?.focus();
+        el?.select?.();
+      }, 50);
+      return () => window.clearTimeout(id);
+    }
+  }, [focus]);
 
   const sshSessionOptions = useMemo(
     () => sessions.filter((s) => s.session_type === "SSH" || s.session_type === "SFTP"),
@@ -108,7 +121,6 @@ export function TunnelEditor({ initial, sessions, onSave, onCancel }: Props) {
     }
   };
 
-  const isLocal = draft.kind === "Local";
   const isRemote = draft.kind === "Remote";
   const isDynamic = draft.kind === "Dynamic";
 
@@ -208,33 +220,31 @@ export function TunnelEditor({ initial, sessions, onSave, onCancel }: Props) {
               title={isRemote ? "Remote clients" : "Local clients"}
               subtitle={isRemote ? "On the SSH server side" : "Apps on this computer"}
             >
-              {!isRemote && (
-                <Field label={forwardedLabel}>
-                  <input
-                    className="moba-input w-24"
-                    type="number"
-                    placeholder="0"
-                    value={draft.listenPort || ""}
-                    onChange={(e) => update("listenPort", parseInt(e.target.value || "0", 10) || 0)}
-                  />
-                  <span className="text-[11px] ml-1" style={{ color: "var(--moba-text-muted)" }}>
-                    (listen)
-                  </span>
-                </Field>
-              )}
-              {!isRemote && (
-                <Field label="Listen address">
-                  <input
-                    className="moba-input w-32"
-                    placeholder="127.0.0.1"
-                    value={draft.listenHost}
-                    onChange={(e) => update("listenHost", e.target.value)}
-                  />
-                </Field>
-              )}
+              <Field label={forwardedLabel} disabled={isRemote}>
+                <input
+                  className="moba-input w-24"
+                  type="number"
+                  placeholder="0"
+                  value={draft.listenPort || ""}
+                  onChange={(e) => update("listenPort", parseInt(e.target.value || "0", 10) || 0)}
+                  disabled={isRemote}
+                />
+                <span className="text-[11px] ml-1" style={{ color: "var(--moba-text-muted)" }}>
+                  (listen)
+                </span>
+              </Field>
+              <Field label="Listen address" disabled={isRemote}>
+                <input
+                  className="moba-input w-32"
+                  placeholder="127.0.0.1"
+                  value={draft.listenHost}
+                  onChange={(e) => update("listenHost", e.target.value)}
+                  disabled={isRemote}
+                />
+              </Field>
               {isRemote && (
                 <div className="text-[11px] mt-2" style={{ color: "var(--moba-text-muted)" }}>
-                  Remote applications will connect to <strong>{draft.listenHost || "0.0.0.0"}:{draft.listenPort || "<port>"}</strong> on the SSH server.
+                  Remote-clients fields are configured by the SSH server when using Remote forwarding.
                 </div>
               )}
               <div className="flex items-center justify-end mt-2">
@@ -284,39 +294,38 @@ export function TunnelEditor({ initial, sessions, onSave, onCancel }: Props) {
                   <option value="Agent">SSH agent</option>
                 </select>
               </Field>
-              {draft.ssh.authMethod === "Password" && (
-                <Field label="Password">
+              <Field
+                label={draft.ssh.authMethod === "PrivateKey" ? "Key path" : "Password"}
+                disabled={draft.ssh.authMethod === "Agent"}
+              >
+                <input
+                  id="tunnel-editor-auth-data"
+                  className="moba-input w-44"
+                  type={draft.ssh.authMethod === "Password" ? "password" : "text"}
+                  placeholder={
+                    draft.ssh.authMethod === "PrivateKey"
+                      ? "~/.ssh/id_ed25519"
+                      : draft.ssh.authMethod === "Agent"
+                        ? "(using SSH agent)"
+                        : ""
+                  }
+                  value={draft.ssh.authData ?? ""}
+                  onChange={(e) => updateSsh("authData", e.target.value)}
+                  disabled={draft.ssh.authMethod === "Agent"}
+                />
+              </Field>
+              <Field label="Vault" disabled={draft.ssh.authMethod === "Agent"}>
+                <label className="flex items-center gap-1.5 text-[11px]">
                   <input
-                    className="moba-input w-44"
-                    type="password"
-                    value={draft.ssh.authData ?? ""}
-                    onChange={(e) => updateSsh("authData", e.target.value)}
+                    type="checkbox"
+                    className="moba-checkbox"
+                    checked={!!draft.ssh.saveAuth}
+                    onChange={(e) => updateSsh("saveAuth", e.target.checked)}
+                    disabled={draft.ssh.authMethod === "Agent"}
                   />
-                </Field>
-              )}
-              {draft.ssh.authMethod === "PrivateKey" && (
-                <Field label="Key path">
-                  <input
-                    className="moba-input w-44"
-                    placeholder="~/.ssh/id_ed25519"
-                    value={draft.ssh.authData ?? ""}
-                    onChange={(e) => updateSsh("authData", e.target.value)}
-                  />
-                </Field>
-              )}
-              {draft.ssh.authMethod !== "Agent" && (
-                <Field label="Vault">
-                  <label className="flex items-center gap-1.5 text-[11px]">
-                    <input
-                      type="checkbox"
-                      className="moba-checkbox"
-                      checked={!!draft.ssh.saveAuth}
-                      onChange={(e) => updateSsh("saveAuth", e.target.checked)}
-                    />
-                    Save credentials to disk
-                  </label>
-                </Field>
-              )}
+                  Save credentials to disk
+                </label>
+              </Field>
             </DiagramCard>
 
             {/* Right column: Remote/SOCKS endpoint */}
@@ -342,48 +351,31 @@ export function TunnelEditor({ initial, sessions, onSave, onCancel }: Props) {
               <div className="flex items-center justify-start mb-1">
                 <ArrowLeft className="w-5 h-5" style={{ color: "var(--moba-accent)" }} />
               </div>
-              {isRemote && (
-                <>
-                  <Field label="Local target *">
-                    <input
-                      className="moba-input w-44"
-                      placeholder="127.0.0.1"
-                      value={draft.destHost}
-                      onChange={(e) => update("destHost", e.target.value)}
-                    />
-                  </Field>
-                  <Field label="Local port *">
-                    <input
-                      className="moba-input w-20"
-                      type="number"
-                      placeholder="5432"
-                      value={draft.destPort || ""}
-                      onChange={(e) => update("destPort", parseInt(e.target.value || "0", 10) || 0)}
-                    />
-                  </Field>
-                </>
-              )}
-              {isLocal && (
-                <>
-                  <Field label={`${destLabel} *`}>
-                    <input
-                      className="moba-input w-44"
-                      placeholder="db.internal"
-                      value={draft.destHost}
-                      onChange={(e) => update("destHost", e.target.value)}
-                    />
-                  </Field>
-                  <Field label="Remote port *">
-                    <input
-                      className="moba-input w-20"
-                      type="number"
-                      placeholder="5432"
-                      value={draft.destPort || ""}
-                      onChange={(e) => update("destPort", parseInt(e.target.value || "0", 10) || 0)}
-                    />
-                  </Field>
-                </>
-              )}
+              <Field
+                label={isRemote ? "Local target *" : `${destLabel} *`}
+                disabled={isDynamic}
+              >
+                <input
+                  className="moba-input w-44"
+                  placeholder={isRemote ? "127.0.0.1" : "db.internal"}
+                  value={draft.destHost}
+                  onChange={(e) => update("destHost", e.target.value)}
+                  disabled={isDynamic}
+                />
+              </Field>
+              <Field
+                label={isRemote ? "Local port *" : "Remote port *"}
+                disabled={isDynamic}
+              >
+                <input
+                  className="moba-input w-20"
+                  type="number"
+                  placeholder="5432"
+                  value={draft.destPort || ""}
+                  onChange={(e) => update("destPort", parseInt(e.target.value || "0", 10) || 0)}
+                  disabled={isDynamic}
+                />
+              </Field>
               {isDynamic && (
                 <div className="text-[11px]" style={{ color: "var(--moba-text-muted)" }}>
                   No fixed destination — point your applications at{" "}
@@ -477,9 +469,20 @@ function DiagramCard({
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+  label,
+  disabled = false,
+  children,
+}: {
+  label: string;
+  disabled?: boolean;
+  children: React.ReactNode;
+}) {
   return (
-    <div className="flex items-center gap-2 text-[12px]">
+    <div
+      className="flex items-center gap-2 text-[12px]"
+      style={{ opacity: disabled ? 0.45 : 1 }}
+    >
       <label className="w-24 text-right shrink-0" style={{ color: "var(--moba-text-muted)" }}>{label}</label>
       <div className="flex items-center gap-1 flex-wrap">{children}</div>
     </div>

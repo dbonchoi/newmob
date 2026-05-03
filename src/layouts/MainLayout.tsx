@@ -660,7 +660,10 @@ export function MainLayout() {
                 {activeTab?.type === "settings" && <SettingsPanel />}
 
                 {activeTab?.type === "nettools" && (
-                  <TunnelManager onStatusMessage={setStatusMessage} />
+                  <TunnelManager
+                    onStatusMessage={setStatusMessage}
+                    onClose={() => removeTab(activeTab.id)}
+                  />
                 )}
 
                 {/* Non-terminal, non-sftp, non-welcome, non-settings, non-nettools tabs */}

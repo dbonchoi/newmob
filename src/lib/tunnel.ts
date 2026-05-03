@@ -79,6 +79,10 @@ export async function reorderTunnels(ids: string[]): Promise<void> {
   return invoke("reorder_tunnels", { ids });
 }
 
+export async function testTunnel(id: string): Promise<string> {
+  return invoke<string>("test_tunnel", { id });
+}
+
 export async function getTunnelStatus(id: string): Promise<TunnelStatusInfo> {
   return invoke<TunnelStatusInfo>("get_tunnel_status", { id });
 }

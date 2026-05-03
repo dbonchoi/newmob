@@ -601,6 +601,9 @@ export async function invoke<T>(cmd: string, args?: InvokeArgs): Promise<T> {
     case "list_tunnel_statuses": {
       return Object.values(tunnelStatuses) as T;
     }
+    case "test_tunnel": {
+      throw new Error("Testing tunnels is only available in the desktop build.");
+    }
     case "reorder_tunnels": {
       const ids = (args?.ids as string[]) ?? [];
       const list = loadTunnels();

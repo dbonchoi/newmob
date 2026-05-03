@@ -700,6 +700,56 @@ pub async fn start_all_tunnels(
 }
 
 #[tauri::command]
+pub async fn test_tunnel(
+    id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let configs = {
+        let _guard = state.tunnels.store_lock.lock().await;
+        load_all(&app)?
+    };
+    let config = configs
+        .into_iter()
+        .find(|t| t.id == id)
+        .ok_or_else(|| format!("tunnel {} not found", id))?;
+    let auth = ssh_auth_from(&config.ssh)?;
+    let handle = connect_ssh_authenticated(
+        &config.ssh.host,
+        config.ssh.port,
+        &config.ssh.username,
+        auth,
+    )
+    .await?;
+    drop(handle);
+    Ok(format!(
+        "SSH connection to {}@{}:{} succeeded",
+        config.ssh.username, config.ssh.host, config.ssh.port
+    ))
+}
+
+/// Called once at startup to start any tunnels that have
+/// `autostart=true` saved on disk. Errors are swallowed but each
+/// failure is published via the normal `tunnel-status` event so the
+/// UI can surface it.
+pub async fn autostart_tunnels(app: AppHandle) {
+    let configs = match load_all(&app) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("autostart: load failed: {}", e);
+            return;
+        }
+    };
+    let state: tauri::State<AppState> = app.state();
+    for c in configs.into_iter().filter(|t| t.autostart.unwrap_or(false)) {
+        let id = c.id.clone();
+        if let Err(e) = start_tunnel(id.clone(), app.clone(), state.clone()).await {
+            tracing::warn!("autostart {}: {}", id, e);
+        }
+    }
+}
+
+#[tauri::command]
 pub async fn stop_all_tunnels(
     app: AppHandle,
     state: State<'_, AppState>,

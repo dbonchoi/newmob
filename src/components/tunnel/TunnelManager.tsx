@@ -16,6 +16,9 @@ import {
   Loader2,
   CheckCircle2,
   CircleDot,
+  Key as KeyIcon,
+  TestTube2,
+  LogOut,
 } from "lucide-react";
 import {
   defaultTunnel,
@@ -29,6 +32,7 @@ import {
   startTunnel,
   stopAllTunnels,
   stopTunnel,
+  testTunnel,
   upsertTunnel,
   type TunnelConfig,
   type TunnelStatus,
@@ -40,14 +44,16 @@ import { isTauriRuntime } from "../../lib/runtime";
 
 interface Props {
   onStatusMessage?: (msg: string) => void;
+  onClose?: () => void;
 }
 
-export function TunnelManager({ onStatusMessage }: Props) {
+export function TunnelManager({ onStatusMessage, onClose }: Props) {
   const { sessions, loadSessions } = useSessionStore();
   const [tunnels, setTunnels] = useState<TunnelConfig[]>([]);
   const [statuses, setStatuses] = useState<Record<string, TunnelStatusInfo>>({});
   const [editing, setEditing] = useState<TunnelConfig | null>(null);
   const [showEditor, setShowEditor] = useState(false);
+  const [editorFocus, setEditorFocus] = useState<"auth" | undefined>(undefined);
   const [revealAuth, setRevealAuth] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -85,12 +91,32 @@ export function TunnelManager({ onStatusMessage }: Props) {
 
   const handleNew = () => {
     setEditing(null);
+    setEditorFocus(undefined);
     setShowEditor(true);
   };
 
   const handleEdit = (t: TunnelConfig) => {
     setEditing(t);
+    setEditorFocus(undefined);
     setShowEditor(true);
+  };
+
+  const handleEditKey = (t: TunnelConfig) => {
+    setEditing(t);
+    setEditorFocus("auth");
+    setShowEditor(true);
+  };
+
+  const handleTest = async (t: TunnelConfig) => {
+    onStatusMessage?.(`Testing tunnel “${t.name}”…`);
+    try {
+      const msg = await testTunnel(t.id);
+      onStatusMessage?.(msg);
+    } catch (err) {
+      onStatusMessage?.(
+        `Test failed for “${t.name}”: ${err instanceof Error ? err.message : err}`,
+      );
+    }
   };
 
   const handleClone = async (t: TunnelConfig) => {
@@ -287,6 +313,8 @@ export function TunnelManager({ onStatusMessage }: Props) {
                     onStart={() => handleStart(t)}
                     onStop={() => handleStop(t)}
                     onEdit={() => handleEdit(t)}
+                    onEditKey={() => handleEditKey(t)}
+                    onTest={() => handleTest(t)}
                     onClone={() => handleClone(t)}
                     onDelete={() => handleDelete(t)}
                     onMoveUp={() => reorder(idx, idx - 1)}
@@ -330,6 +358,16 @@ export function TunnelManager({ onStatusMessage }: Props) {
         >
           <Square className="w-3.5 h-3.5" style={{ color: "#b22222" }} /> Stop all tunnels
         </button>
+        {onClose && (
+          <button
+            type="button"
+            className="moba-btn flex items-center gap-1.5"
+            onClick={onClose}
+            title="Close the tunnels tab"
+          >
+            <LogOut className="w-3.5 h-3.5" /> Exit
+          </button>
+        )}
         <div className="flex-1" />
         <span className="text-[11px]" style={{ color: "var(--moba-text-muted)" }}>
           {tunnels.length} tunnel{tunnels.length === 1 ? "" : "s"} ·{" "}
@@ -341,10 +379,12 @@ export function TunnelManager({ onStatusMessage }: Props) {
         <TunnelEditor
           initial={editing ?? undefined}
           sessions={sessions}
+          focus={editorFocus}
           onSave={handleSaveDraft}
           onCancel={() => {
             setShowEditor(false);
             setEditing(null);
+            setEditorFocus(undefined);
           }}
         />
       )}
@@ -403,6 +443,8 @@ function TunnelRow({
   onStart,
   onStop,
   onEdit,
+  onEditKey,
+  onTest,
   onClone,
   onDelete,
   onMoveUp,
@@ -418,6 +460,8 @@ function TunnelRow({
   onStart: () => void;
   onStop: () => void;
   onEdit: () => void;
+  onEditKey: () => void;
+  onTest: () => void;
   onClone: () => void;
   onDelete: () => void;
   onMoveUp: () => void;
@@ -538,6 +582,12 @@ function TunnelRow({
         <div className="flex items-center justify-center gap-1">
           <IconBtn title="Edit" onClick={onEdit}>
             <Pencil className="w-3.5 h-3.5" style={{ color: "#2b5d8b" }} />
+          </IconBtn>
+          <IconBtn title="Manage SSH key / credentials" onClick={onEditKey}>
+            <KeyIcon className="w-3.5 h-3.5" style={{ color: "#c97a23" }} />
+          </IconBtn>
+          <IconBtn title="Test SSH connection" onClick={onTest}>
+            <TestTube2 className="w-3.5 h-3.5" style={{ color: "#1e6db8" }} />
           </IconBtn>
           <IconBtn title="Clone" onClick={onClone}>
             <Copy className="w-3.5 h-3.5" style={{ color: "#7a3d9d" }} />
