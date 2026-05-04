@@ -39,6 +39,8 @@ DEFAULT_CONFIG = ROOT / "qa-ui-auto.config.yaml"
 TEMPLATE = HERE.parent / "assets" / "testcase-for-auto.template.md"
 CONFIG_EXAMPLE = HERE.parent / "assets" / "qa-ui-auto.config.example.yaml"
 AUTO_HEADER = "<!-- qa-ui-auto:auto-generated -->"
+DEV_PROXY_ALLOW_PRIVATE = "DEV_PROXY_ALLOW_PRIVATE"
+ALLOW_PRIVATE_TARGETS = "ALLOW_PRIVATE_TARGETS"
 
 
 def log(msg: str) -> None:
@@ -480,6 +482,8 @@ def case_matches_mode(case: TestCase, mode: str) -> bool:
 
 
 def main() -> int:
+    os.environ.setdefault(DEV_PROXY_ALLOW_PRIVATE, "1")
+    os.environ.setdefault(ALLOW_PRIVATE_TARGETS, "1")
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", choices=["browser", "native"], default="browser")
     ap.add_argument("--testcases", default=str(DEFAULT_TESTCASES))
