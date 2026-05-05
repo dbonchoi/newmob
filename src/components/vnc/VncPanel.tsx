@@ -42,8 +42,6 @@ export default function VncPanel({
   const wsRef = useRef<WebSocket | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const frameBufferRef = useRef<PendingFrame[]>([]);
-  const wsFrameLogCountRef = useRef(0);
-  const drawFrameLogCountRef = useRef(0);
   const rafRef = useRef<number>(0);
   const destroyedRef = useRef(false);
   const disconnectedByServerRef = useRef(false);
@@ -67,12 +65,9 @@ export default function VncPanel({
 
     let cancelled = false;
     disconnectedByServerRef.current = false;
-    wsFrameLogCountRef.current = 0;
-    drawFrameLogCountRef.current = 0;
 
     (async () => {
       try {
-        console.debug("[VNC] connect requested", { host: h, port: p, username: user ?? null });
         const result = await vncConnect(h, p, user, pw);
         if (cancelled || destroyedRef.current) {
           vncDisconnect(result.session_id).catch(() => {});
@@ -81,18 +76,10 @@ export default function VncPanel({
 
         sessionIdRef.current = result.session_id;
         store.setConnecting(tabId, result.session_id, result.ws_port);
-        console.debug("[VNC] relay allocated", {
-          sessionId: result.session_id,
-          wsPort: result.ws_port,
-        });
 
         const ws = new WebSocket(`ws://127.0.0.1:${result.ws_port}`);
         ws.binaryType = "arraybuffer";
         wsRef.current = ws;
-
-        ws.onopen = () => {
-          console.debug("[VNC] websocket open", { wsPort: result.ws_port });
-        };
 
         ws.onmessage = (event) => {
           if (destroyedRef.current) return;
@@ -101,18 +88,9 @@ export default function VncPanel({
             if (!header) return;
             const rgba = new Uint8Array(event.data, 12);
             frameBufferRef.current.push({ ...header, rgba });
-            wsFrameLogCountRef.current += 1;
-            if (wsFrameLogCountRef.current <= 20 || wsFrameLogCountRef.current % 60 === 0) {
-              console.debug("[VNC] websocket frame", {
-                count: wsFrameLogCountRef.current,
-                ...header,
-                bytes: rgba.length,
-              });
-            }
           } else {
             const msg = parseWsMessage(event.data as string);
             if (!msg) return;
-            console.debug("[VNC] websocket text", msg);
             switch (msg.type) {
               case "connected":
                 store.setConnected(tabId, msg.width, msg.height, msg.name);
@@ -209,20 +187,6 @@ export default function VncPanel({
           const imgData = new ImageData(pixelData, frame.w || 1, frame.h || 1);
           try {
             ctx.putImageData(imgData, frame.x, frame.y);
-            drawFrameLogCountRef.current += 1;
-            if (
-              drawFrameLogCountRef.current <= 20 ||
-              drawFrameLogCountRef.current % 60 === 0
-            ) {
-              console.debug("[VNC] canvas frame drawn", {
-                count: drawFrameLogCountRef.current,
-                x: frame.x,
-                y: frame.y,
-                w: frame.w,
-                h: frame.h,
-                bytes: frame.rgba.length,
-              });
-            }
           } catch {
             // size mismatch, skip
           }

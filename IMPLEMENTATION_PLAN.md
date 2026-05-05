@@ -527,25 +527,39 @@
 
 ## Phase 6：RDP/VNC/Serial 与导入导出
 
-### Task 6.1 — RDP/VNC 启动器
+### Task 6.1 — RDP/VNC 启动器 / VNC 客户端 🟡 PARTIAL
 
-**范围：** 调用系统客户端连接 RDP/VNC
+**范围：** 原计划为调用系统客户端连接 RDP/VNC；当前已接入基础嵌入式 VNC client，RDP 仍未实装。
 
-**具体步骤：**
-1. 创建 `src/components/remote_desktop/RdpLauncher.tsx` — RDP 配置与启动
-2. 创建 `src/components/remote_desktop/VncViewer.tsx` — VNC 配置与启动
-3. Rust 端实现平台判断和系统命令调用：
-   - Linux RDP: `xfreerdp /v:{host}:{port}`
-   - macOS RDP: `open rdp://...`
-   - Windows RDP: `mstsc.exe /v:{host}:{port}`
-   - VNC 类似处理
+**完成状态：** 🟡 基础 VNC client 已可用，但未经过大规模兼容性/压力测试；本 Task 不能标记为 DONE。
+
+**当前已完成：**
+1. Rust 端新增 `src-tauri/src/vnc/{mod,rfb,ws,encodings}.rs`：
+   - RFB 握手与认证：None、VNC password、RealVNC RA2/RA2ne 基础路径
+   - 本地动态端口 WebSocket relay：VNC server ↔ 前端 Canvas
+   - `vnc_connect` / `vnc_disconnect` / `vnc_test_connection`
+2. 前端新增/接入：
+   - `src/components/vnc/VncPanel.tsx` — Canvas 渲染、键盘/鼠标/滚轮、剪贴板、重连、fit/1:1 显示
+   - `src/lib/vnc.ts`、`src/stores/vncStore.ts`
+   - `src/layouts/MainLayout.tsx` / `src/types/index.ts` 支持 VNC tab 常驻挂载
+3. 保存的 VNC 会话支持通过会话树连接，密码认证走现有 `AuthPrompt`。
+
+**后续待完成/限制：**
+1. RDP 启动器仍未实现。
+2. VNC 仅记录为基础 client 支持，尚缺大规模服务器兼容性、长连接、性能和自动化回归测试。
+3. 当前 relay 为稳定优先，主要请求 Raw + DesktopSize；更高效编码兼容性仍需补齐/验证。
+4. QuickConnect 的 VNC 入口尚未接入 VNC client 主流程。
+5. 浏览器预览模式没有 VNC stub，VNC 连接依赖 Tauri desktop 后端。
 
 **产出文件：**
-- `src/components/remote_desktop/RdpLauncher.tsx`
-- `src/components/remote_desktop/VncViewer.tsx`
-- Rust 端启动器 command
+- `src-tauri/src/vnc/{mod,rfb,ws,encodings}.rs`
+- `src/components/vnc/VncPanel.tsx`
+- `src/lib/vnc.ts`
+- `src/stores/vncStore.ts`
+- `src/layouts/MainLayout.tsx`
+- `src/types/index.ts`
 
-**验收：** 双击 RDP/VNC 会话 → 调用系统客户端打开远程桌面
+**验收状态：** 已保存 VNC 会话 → 输入密码（如需）→ 打开内嵌 VNC 标签页 → 基本画面与输入可用；RDP 与大规模 VNC 测试未完成。
 
 ---
 
@@ -663,7 +677,7 @@ Phase 6 (Phase 2 完成后):
 | 5.1 分屏终端 | 中 | 纯前端 | ~2 |
 | 5.2 Multi-Exec | 中 | 均衡 | ~3 |
 | 5.3 网络工具 | 中 | 均衡 | ~8 |
-| 6.1 RDP/VNC | 低 | 均衡 | ~3 |
+| 6.1 RDP/VNC 🟡 PARTIAL | 高 | 均衡 | ~12 |
 | 6.2 串口 | 中 | 后端为主 | ~1 |
 | 6.3 导入导出 | 中 | 均衡 | ~2 |
 | 6.4 设置面板 | 中 | 均衡 | ~2 |

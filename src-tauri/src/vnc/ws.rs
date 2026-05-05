@@ -109,11 +109,6 @@ pub async fn spawn_vnc_relay(
         .local_addr()
         .map_err(|e| format!("local addr: {}", e))?
         .port();
-    eprintln!(
-        "[VNC WS] relay listening on 127.0.0.1:{}, framebuffer={}x{}",
-        ws_port, server_init.width, server_init.height
-    );
-
     // 3. Channel setup
     let (control_tx, control_rx) = mpsc::unbounded_channel::<VncControl>();
     let (ws_out_tx, ws_out_rx) = mpsc::unbounded_channel::<WsOutgoing>();
@@ -174,8 +169,6 @@ async fn run_relay(
         r = listener.accept() => r.map_err(|e| format!("accept: {}", e))?,
         _ = cancel.cancelled() => return Ok(()),
     };
-    eprintln!("[VNC WS] browser websocket accepted");
-
     let ws_stream = tokio_tungstenite::accept_async(stream)
         .await
         .map_err(|e| format!("WS upgrade: {}", e))?;
@@ -237,8 +230,6 @@ async fn run_relay(
     let ws_out = ws_out_tx.clone();
     let cancel_vnc = cancel.clone();
     let vnc_read = tokio::spawn(async move {
-        let mut update_count: u64 = 0;
-        let mut frame_count: u64 = 0;
         loop {
             if cancel_vnc.is_cancelled() {
                 break;
@@ -248,7 +239,6 @@ async fn run_relay(
                 match conn.read_message() {
                     Ok(m) => m,
                     Err(e) => {
-                        eprintln!("[VNC] read loop ended: {}", e);
                         let json = serde_json::to_string(&WsOutgoingText::Disconnected {
                             reason: e.clone(),
                         })
@@ -260,27 +250,6 @@ async fn run_relay(
             };
             match msg {
                 ServerMessage::FramebufferUpdate(update) => {
-                    update_count += 1;
-                    let log_update = update_count <= 20 || update_count % 60 == 0;
-                    if log_update {
-                        eprintln!(
-                            "[VNC] framebuffer update #{}: {} rect(s)",
-                            update_count,
-                            update.rects.len()
-                        );
-                        for (idx, rect) in update.rects.iter().take(8).enumerate() {
-                            eprintln!(
-                                "[VNC]   rect #{}: x={}, y={}, w={}, h={}, encoding={}, data_len={}",
-                                idx + 1,
-                                rect.x,
-                                rect.y,
-                                rect.w,
-                                rect.h,
-                                rect.encoding,
-                                rect.data.len()
-                            );
-                        }
-                    }
                     let (decoded, fb_width, fb_height) = {
                         let mut conn = rfb_read.lock().await;
                         match conn.decode_update(&update) {
@@ -295,22 +264,13 @@ async fn run_relay(
                         let mut writer = rfb_writer_for_read.lock().await;
                         writer.set_framebuffer_size(fb_width, fb_height);
                     }
-                    let mut sent_in_update = 0u64;
                     for rect in decoded {
                         if let DecodedRect::Pixels { x, y, w, h, rgba } = rect {
                             let mut frame = Vec::with_capacity(12 + rgba.len());
                             frame.extend_from_slice(&make_frame_header(x, y, w, h));
                             frame.extend_from_slice(&rgba);
                             let _ = ws_out.send(WsOutgoing::Frame(frame));
-                            frame_count += 1;
-                            sent_in_update += 1;
                         }
-                    }
-                    if log_update {
-                        eprintln!(
-                            "[VNC] framebuffer update #{} decoded: sent {} pixel frame(s), total_sent={}",
-                            update_count, sent_in_update, frame_count
-                        );
                     }
                 }
                 ServerMessage::Bell => {

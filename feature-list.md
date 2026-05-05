@@ -26,7 +26,7 @@
 - 侧边栏宽度通过 `react-resizable-panels` 持久化
 
 ### 1.3 标签页系统 ✅
-- 多标签：本地终端 / SSH 终端 / SFTP / 设置 / 隧道管理 / Welcome / 占位标签
+- 多标签：本地终端 / SSH 终端 / SFTP / VNC / 设置 / 隧道管理 / Welcome / 占位标签
 - 标签操作：新建、切换、关闭、中键关闭
 - 标签右键菜单：关闭、关闭其他、关闭全部、复制标签、新建本地终端
 - SSH 与 SFTP 标签 **常驻挂载**（切换标签不销毁，传输/输出不中断）
@@ -186,7 +186,7 @@
 - 「最近连接」区域
 
 ### 6.3 会话编辑器 `SessionEditor` ✅
-- 协议选择：SSH、SFTP、RDP、VNC（选项可见；后端对 SSH/SFTP 实装）
+- 协议选择：SSH、SFTP、RDP、VNC（SSH/SFTP 已实装；VNC 为基础 client 支持；RDP 仍占位）
 - 基础设置：host、port、username、auth method
 - Advanced SSH：SSH-browser type、Auto-inject OSC 7、Execute command、跳板机/代理
 - Terminal：复用 `TerminalAppearanceSettings` 全套外观控件
@@ -293,7 +293,22 @@
 
 ---
 
-## 9. 应用全局设置 `SettingsPanel` ✅
+## 9. VNC 客户端（基础支持）
+
+### 9.1 嵌入式 VNC client 🟡
+- Rust 端 VNC 模块：`src-tauri/src/vnc/{mod,rfb,ws,encodings}.rs`
+- Tauri 命令：`vnc_connect / vnc_disconnect / vnc_test_connection`
+- RFB 握手与认证基础路径：None、VNC password、RealVNC RA2/RA2ne
+- 本地动态端口 WebSocket relay：VNC server ↔ 前端 Canvas
+- 前端 `VncPanel`：Canvas 画面渲染、键盘、鼠标、滚轮、剪贴板、断开提示、Reconnect、fit / 1:1 显示
+- 保存的 VNC 会话可从会话树双击连接；密码场景复用 `AuthPrompt`
+- VNC tab 常驻挂载，切换标签时连接不主动销毁
+- 当前按“基础支持”记录：尚未经过大规模服务器兼容性、长连接、性能和自动化回归测试
+- 已知限制：RDP 未实装；QuickConnect 的 VNC URL 尚未接入 VNC client 主流程；浏览器预览模式没有 VNC stub；当前 relay 主要请求 Raw + DesktopSize，编码兼容性仍需补齐/验证
+
+---
+
+## 10. 应用全局设置 `SettingsPanel` ✅
 - Application Theme 切换（Light / Dark / Follow system）
 - Terminal Appearance 区块（与会话编辑器 Terminal 段一致的完整外观与行为控件）
 - 终端预览
@@ -301,20 +316,20 @@
 
 ---
 
-## 10. 自动化测试基线
+## 11. 自动化测试基线
 
-### 10.1 单元测试（Vitest）✅ 21 个测试通过
+### 11.1 单元测试（Vitest）✅ 21 个测试通过
 - `ChmodDialog`、`FileToolbarWiring`、`SftpPolish`
 - `SessionEditor`
 - `AppThemeSwitcher`、`SettingsPanel`、`TerminalAppearanceSettings`
 - `MainLayout`
 - `sessionImportExport`、`terminalImeGuard`
 
-### 10.2 Rust 测试 ✅
+### 11.2 Rust 测试 ✅
 - `appearance::lists_installed_font_families` 验证 OS 字体枚举
 - `cargo check` 通过
 
-### 10.3 端到端测试用例（`testcase-for-auto.md`，被 `qa-ui-auto` 消费）✅ 14 条
+### 11.3 端到端测试用例（`testcase-for-auto.md`，被 `qa-ui-auto` 消费）✅ 14 条
 - TC-001 主界面 shell 渲染
 - TC-002 全局设置外观持久化
 - TC-003 SSH 会话编辑器各 section
@@ -330,7 +345,7 @@
 - TC-013 会话树搜索 / 复制 / 右键
 - TC-014 标签栏右键菜单
 
-### 10.4 部署 ✅
+### 11.4 部署 ✅
 - Replit 上验证通过：Tauri 桌面构建（`pnpm tauri build --debug --no-bundle`）通过 VNC 查看；Web 模式作为静态站点构建到 `dist/`
 
 ---
@@ -342,7 +357,8 @@
 > - Ribbon `Split` / `MultiExec`
 > - Ribbon `Tools`（除 Tunneling 之外的网络工具）
 > - Ribbon `Packages`、`Games`、`Macros`
-> - 会话协议 RDP / VNC（仅保留会话存储与编辑表单，连接动作打开占位 tab）
+> - 会话协议 RDP（仅保留会话存储与编辑表单，连接动作打开占位 tab）
+> - QuickConnect 的 VNC URL 入口（已保存 VNC 会话可连接，QuickConnect 尚未接入 VNC client）
 > - SFTP 底部的 "Cross-host transfer (remote ↔ remote)" 按钮（disabled 占位）
 > - Z-modem 收发（菜单项保留但 disabled）
 

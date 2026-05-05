@@ -166,18 +166,13 @@ export function detectDetachedSftpRoute(): string | null {
   try {
     // Fragment: #sftp=<sessionId>  (Tauri native window path)
     const hash = window.location.hash;
-    console.log("[detectDetachedSftpRoute] hash:", hash);
     if (hash.startsWith("#sftp=")) {
       const id = hash.slice("#sftp=".length);
-      console.log("[detectDetachedSftpRoute] Found session id in hash:", id);
       if (id) return id;
     }
     // Query string: ?sftp=<sessionId>  (browser window.open path)
     const url = new URL(window.location.href);
-    const queryId = url.searchParams.get("sftp");
-    console.log("[detectDetachedSftpRoute] query sftp param:", queryId);
-    console.log("[detectDetachedSftpRoute] full URL:", window.location.href);
-    return queryId;
+    return url.searchParams.get("sftp");
   } catch {
     return null;
   }

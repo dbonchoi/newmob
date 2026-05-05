@@ -45,6 +45,8 @@ interface SessionState {
   setSearchQuery: (query: string) => void;
 }
 
+let pendingLoadSessions: Promise<void> | null = null;
+
 function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }
@@ -75,17 +77,25 @@ export const useSessionStore = create<SessionState>((set) => ({
   searchQuery: "",
 
   loadSessions: async () => {
+    if (pendingLoadSessions) return pendingLoadSessions;
+
     set({ loading: true });
-    try {
-      const [sessions, groups] = await Promise.all([
-        listSessions(),
-        listSessionGroups(),
-      ]);
-      set({ sessions, groups, loading: false });
-    } catch (err) {
-      console.error("Failed to load sessions:", err);
-      set({ loading: false });
-    }
+    pendingLoadSessions = (async () => {
+      try {
+        const [sessions, groups] = await Promise.all([
+          listSessions(),
+          listSessionGroups(),
+        ]);
+        set({ sessions, groups, loading: false });
+      } catch (err) {
+        console.error("Failed to load sessions:", err);
+        set({ loading: false });
+      } finally {
+        pendingLoadSessions = null;
+      }
+    })();
+
+    return pendingLoadSessions;
   },
 
   addSession: async (config) => {

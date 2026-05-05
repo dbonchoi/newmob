@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, useCallback } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   Panel,
@@ -13,7 +13,6 @@ import { Sidebar } from "../components/sidebar/Sidebar";
 import { TabBar } from "../components/tabbar/TabBar";
 import { StatusBar } from "../components/statusbar/StatusBar";
 import { TerminalPanel } from "../components/terminal/TerminalPanel";
-import VncPanel from "../components/vnc/VncPanel";
 import { SessionEditor } from "../components/session/SessionEditor";
 import { AuthPrompt } from "../components/session/AuthPrompt";
 import { SettingsPanel } from "../components/settings/SettingsPanel";
@@ -39,6 +38,8 @@ import { parseQuickConnectInput } from "../lib/quickConnect";
 import { exitApp, type SessionConfig } from "../lib/ipc";
 import { getSessionTerminalProfile, type TerminalProfile } from "../lib/terminalProfile";
 import type { LocalShellSelection } from "../types";
+
+const VncPanel = lazy(() => import("../components/vnc/VncPanel"));
 
 interface PendingAuth {
   session: SessionConfig;
@@ -705,14 +706,16 @@ export function MainLayout() {
                       className="absolute inset-0"
                       style={{ display: isActive ? "block" : "none" }}
                     >
-                      <VncPanel
-                        tabId={tab.id}
-                        host={tab.vnc.host}
-                        port={tab.vnc.port}
-                        username={tab.vnc.username}
-                        password={tab.vnc.password}
-                        visible={isActive}
-                      />
+                      <Suspense fallback={<VncLoadingPanel />}>
+                        <VncPanel
+                          tabId={tab.id}
+                          host={tab.vnc.host}
+                          port={tab.vnc.port}
+                          username={tab.vnc.username}
+                          password={tab.vnc.password}
+                          visible={isActive}
+                        />
+                      </Suspense>
                     </div>
                   );
                 })}
@@ -764,6 +767,17 @@ export function MainLayout() {
           onCancel={() => setPendingAuth(null)}
         />
       )}
+    </div>
+  );
+}
+
+function VncLoadingPanel() {
+  return (
+    <div
+      className="w-full h-full flex items-center justify-center text-sm"
+      style={{ background: "var(--moba-term-bg)", color: "var(--moba-term-text)" }}
+    >
+      Loading VNC...
     </div>
   );
 }

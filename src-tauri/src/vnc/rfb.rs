@@ -7,7 +7,6 @@ use crate::vnc::encodings::{self, DecodedRect};
 const SEC_TYPE_NONE: u8 = 1;
 const SEC_TYPE_VNC_AUTH: u8 = 2;
 const SEC_TYPE_RA2_128: u8 = 5;
-const SEC_TYPE_RA2R_128: u8 = 13;
 const SEC_TYPE_RA2NE_128: u8 = 6;
 const SEC_TYPE_RA2_256: u8 = 129;
 const SEC_TYPE_RA2NE_256: u8 = 130;
@@ -95,11 +94,6 @@ impl RfbConnection {
             ));
         }
 
-        eprintln!(
-            "[VNC] server version: {}",
-            String::from_utf8_lossy(&buf).trim_end()
-        );
-
         // Parse "RFB MMM.NNN\n": major = buf[4..7], minor = buf[8..11]
         let major: u32 = std::str::from_utf8(&buf[4..7])
             .ok()
@@ -121,7 +115,6 @@ impl RfbConnection {
         };
 
         self.proto_minor = negotiated_minor;
-        eprintln!("[VNC] negotiated version: 3.{}", negotiated_minor);
 
         self.write_all(reply)
             .map_err(|e| format!("write protocol version: {}", e))?;
@@ -166,12 +159,6 @@ impl RfbConnection {
         self.read_exact(&mut types)
             .map_err(|e| format!("read security types: {}", e))?;
 
-        eprintln!(
-            "[VNC] security types offered: {:?} ({})",
-            types,
-            security_type_list(&types)
-        );
-
         let chosen = if types.contains(&SEC_TYPE_NONE) {
             SEC_TYPE_NONE
         } else if types.contains(&SEC_TYPE_RA2NE_256) {
@@ -190,12 +177,6 @@ impl RfbConnection {
                 types
             ));
         };
-
-        eprintln!(
-            "[VNC] selected security type: {} ({})",
-            chosen,
-            security_type_name(chosen)
-        );
 
         self.write_all(&[chosen])
             .map_err(|e| format!("write security type: {}", e))?;
@@ -220,7 +201,6 @@ impl RfbConnection {
             self.read_exact(&mut result_buf)
                 .map_err(|e| format!("read security result: {}", e))?;
             let result = u32::from_be_bytes(result_buf);
-            eprintln!("[VNC] security result: {}", result);
             if result != 0 {
                 // 3.8 sends a reason string; 3.7 does not
                 if self.proto_minor >= 8 {
@@ -231,10 +211,6 @@ impl RfbConnection {
                     let mut reason = vec![0u8; reason_len];
                     self.read_exact(&mut reason)
                         .map_err(|e| format!("read auth failure reason: {}", e))?;
-                    eprintln!(
-                        "[VNC] authentication failure reason: {}",
-                        String::from_utf8_lossy(&reason)
-                    );
                     return Err(format!(
                         "authentication failed: {}",
                         String::from_utf8_lossy(&reason)
@@ -262,8 +238,6 @@ impl RfbConnection {
         self.read_exact(&mut buf)
             .map_err(|e| format!("read v3.3 security type: {}", e))?;
         let sec_type = u32::from_be_bytes(buf);
-        eprintln!("[VNC 3.3] security type: {}", sec_type);
-
         match sec_type {
             0 => {
                 // Connection failed — server sends a reason string
@@ -343,12 +317,6 @@ impl RfbConnection {
         self.read_exact(&mut len_buf)
             .map_err(|e| format!("RA2: read key length: {}", e))?;
         let key_bits = u32::from_be_bytes(len_buf) as usize;
-        eprintln!(
-            "[VNC {}] key_bits={}, aes_bits={}",
-            security_type_name(sec_type),
-            key_bits,
-            random_len * 8
-        );
 
         if !(RA2_MIN_KEY_BITS..=RA2_MAX_KEY_BITS).contains(&key_bits) {
             return Err(format!("RA2: unreasonable key length: {} bits", key_bits));
@@ -361,13 +329,6 @@ impl RfbConnection {
         let mut server_e = vec![0u8; key_bytes_len];
         self.read_exact(&mut server_e)
             .map_err(|e| format!("RA2: read exponent: {}", e))?;
-
-        eprintln!(
-            "[VNC {}] server_n[0..4]={:02x?}, server_e={}",
-            security_type_name(sec_type),
-            &server_n[..4.min(server_n.len())],
-            BigUint::from_bytes_be(&server_e)
-        );
 
         let modulus = BigUint::from_bytes_be(&server_n);
         let exponent = BigUint::from_bytes_be(&server_e);
@@ -469,12 +430,6 @@ impl RfbConnection {
         if subtype != RA2_SUBTYPE_USER_PASS && subtype != RA2_SUBTYPE_PASS {
             return Err(format!("RA2: unsupported auth subtype {}", subtype));
         }
-        eprintln!(
-            "[VNC {}] auth subtype: {} ({})",
-            security_type_name(sec_type),
-            subtype,
-            ra2_subtype_name(subtype)
-        );
 
         let username_bytes = username.as_bytes();
         if subtype == RA2_SUBTYPE_USER_PASS && username_bytes.is_empty() {
@@ -497,14 +452,6 @@ impl RfbConnection {
         } else {
             0
         };
-        eprintln!(
-            "[VNC {}] sending credentials: subtype={}, username_len={}, password_len={}",
-            security_type_name(sec_type),
-            ra2_subtype_name(subtype),
-            credential_username_len,
-            password_bytes.len()
-        );
-
         let mut credentials =
             Vec::with_capacity(password_bytes.len() + credential_username_len + 2);
         if subtype == RA2_SUBTYPE_USER_PASS {
@@ -522,10 +469,6 @@ impl RfbConnection {
             self.secure_io = Some(RsaAesIo::new(aes_in, aes_out));
         }
 
-        eprintln!(
-            "[VNC {}] authentication exchange sent",
-            security_type_name(sec_type)
-        );
         Ok(())
     }
 
@@ -559,11 +502,6 @@ impl RfbConnection {
         // Allocate framebuffer (RGBA 32-bit)
         let fb_size = self.width as usize * self.height as usize * 4;
         self.framebuffer = vec![0u8; fb_size];
-
-        eprintln!(
-            "[VNC] server init: {}x{}, name={:?}",
-            self.width, self.height, self.name
-        );
 
         Ok(ServerInit {
             width: self.width,
@@ -601,8 +539,6 @@ impl RfbConnection {
             .map_err(|e| format!("write set pixel format: {}", e))?;
         self.flush().map_err(|e| format!("flush: {}", e))?;
 
-        eprintln!("[VNC] set pixel format: bpp=32 depth=32 true_color=1 shifts=0/8/16");
-
         Ok(())
     }
 
@@ -623,15 +559,6 @@ impl RfbConnection {
             .map_err(|e| format!("write set encodings: {}", e))?;
         self.flush().map_err(|e| format!("flush: {}", e))?;
 
-        eprintln!(
-            "[VNC] set encodings: {}",
-            encodings
-                .iter()
-                .map(|enc| encoding_name(*enc))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-
         Ok(())
     }
 
@@ -648,11 +575,6 @@ impl RfbConnection {
         self.write_all(&msg)
             .map_err(|e| format!("write update request: {}", e))?;
         self.flush().map_err(|e| format!("flush: {}", e))?;
-
-        eprintln!(
-            "[VNC] framebuffer update request: incremental={}, region=0,0 {}x{}",
-            incremental, self.width, self.height
-        );
 
         Ok(())
     }
@@ -993,11 +915,6 @@ impl RfbWriter {
         self.write_all(&msg)
             .map_err(|e| format!("write update request: {}", e))?;
         self.flush().map_err(|e| format!("flush: {}", e))?;
-
-        eprintln!(
-            "[VNC] framebuffer update request: incremental={}, region=0,0 {}x{}",
-            incremental, self.width, self.height
-        );
 
         Ok(())
     }
@@ -1419,47 +1336,6 @@ fn increment_le(counter: &mut [u8; 16]) {
         if !carry {
             break;
         }
-    }
-}
-
-fn security_type_name(sec_type: u8) -> &'static str {
-    match sec_type {
-        SEC_TYPE_NONE => "None",
-        SEC_TYPE_VNC_AUTH => "VncAuth",
-        SEC_TYPE_RA2_128 => "RA2_128",
-        SEC_TYPE_RA2R_128 => "RA2r_128",
-        SEC_TYPE_RA2NE_128 => "RA2ne_128",
-        SEC_TYPE_RA2_256 => "RA2_256",
-        SEC_TYPE_RA2NE_256 => "RA2ne_256",
-        _ => "unknown",
-    }
-}
-
-fn security_type_list(types: &[u8]) -> String {
-    types
-        .iter()
-        .map(|t| format!("{}={}", t, security_type_name(*t)))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-fn encoding_name(encoding: i32) -> String {
-    match encoding {
-        0 => "Raw(0)".to_string(),
-        1 => "CopyRect(1)".to_string(),
-        5 => "Hextile(5)".to_string(),
-        7 => "Tight(7)".to_string(),
-        16 => "ZRLE(16)".to_string(),
-        -223 => "DesktopSize(-223)".to_string(),
-        other => other.to_string(),
-    }
-}
-
-fn ra2_subtype_name(subtype: u8) -> &'static str {
-    match subtype {
-        RA2_SUBTYPE_USER_PASS => "UserPass",
-        RA2_SUBTYPE_PASS => "PasswordOnly",
-        _ => "unknown",
     }
 }
 
